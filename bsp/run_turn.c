@@ -1,6 +1,9 @@
 /*======================== run_turn.c ========================*/
 #include "run_turn.h"
-
+/* 参数 */
+#define TARGET_DISTANCE_CM  4.0f
+#define PULSE_PER_CM  (pulse_cnt_per_circle_default / (2.0f * 3.1415926f * tire_radius_cm_default))
+#define TARGET_PULSE   ((int32_t)(TARGET_DISTANCE_CM * PULSE_PER_CM))
 /* 外部变量 */
 extern float gray_status[2];
 extern _gray_state gray_state;
@@ -30,11 +33,6 @@ static float relative_angle = 0;
 static SharpTurnState sharp_state = SHARP_DELAY;
 static uint8_t turn_complete_count = 0;  // 转向完成次数计数
 static uint8_t run_turn_enabled = 1;     // 是否启用转向逻辑（停机标志）
-
-/* 参数 */
-#define TARGET_DISTANCE_CM  4.0f
-#define PULSE_PER_CM  (pulse_cnt_per_circle_default / (2.0f * 3.1415926f * tire_radius_cm_default))
-#define TARGET_PULSE   ((int32_t)(TARGET_DISTANCE_CM * PULSE_PER_CM))
 
 
 /*======================== 获取状态接口 ========================*/
