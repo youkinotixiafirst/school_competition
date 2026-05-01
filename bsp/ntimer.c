@@ -47,7 +47,7 @@ void TIMER_G0_INST_IRQHandler(void)
       get_systime(&t_g0);
       maple_duty_200hz();
       static uint32_t _cnt = 0; _cnt++;
-      if(_cnt % 50 == 0)	DL_GPIO_togglePins(RGB_PORT, RGB_RED_PIN);
+      if(_cnt % 50 == 0)	DL_GPIO_togglePins(GPIO_RGB_PORT, GPIO_RGB_GREEN_PIN);
     }
     break;
 
