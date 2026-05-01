@@ -12,60 +12,60 @@
 void usart_irq_config(void)
 {
     // 清除中断标志
-    NVIC_ClearPendingIRQ(UART_0_INST_INT_IRQN);
-    NVIC_ClearPendingIRQ(UART_1_INST_INT_IRQN);
-    NVIC_ClearPendingIRQ(UART_2_INST_INT_IRQN);
+    NVIC_ClearPendingIRQ(stepper_motor1_INST_INT_IRQN);
+    NVIC_ClearPendingIRQ(stepper_motor2_INST_INT_IRQN);
+    NVIC_ClearPendingIRQ(MaixCam_INST_INT_IRQN);
     // UART3 不用（超声波已删除）
     NVIC_DisableIRQ(UART_3_INST_INT_IRQN);
     DL_UART_clearInterruptStatus(UART_3_INST, DL_UART_INTERRUPT_RX);
 
     // 使能需要用到的串口中断
-    NVIC_EnableIRQ(UART_0_INST_INT_IRQN);   // 步进电机1
-    NVIC_EnableIRQ(UART_1_INST_INT_IRQN);   // MaixCam 视觉
-    NVIC_EnableIRQ(UART_2_INST_INT_IRQN);   // 步进电机2
+    NVIC_EnableIRQ(stepper_motor1_INST_INT_IRQN);   // 步进电机1
+    NVIC_EnableIRQ(stepper_motor2_INST_INT_IRQN);   // 步进电机2
+    NVIC_EnableIRQ(MaixCam_INST_INT_IRQN);   // MaixCam 视觉
 
     // 清除接收中断标志
-    DL_UART_clearInterruptStatus(UART_0_INST, DL_UART_INTERRUPT_RX);
-    DL_UART_clearInterruptStatus(UART_1_INST, DL_UART_INTERRUPT_RX);
-    DL_UART_clearInterruptStatus(UART_2_INST, DL_UART_INTERRUPT_RX);
+    DL_UART_clearInterruptStatus(stepper_motor1_INST, DL_UART_INTERRUPT_RX);
+    DL_UART_clearInterruptStatus(stepper_motor2_INST, DL_UART_INTERRUPT_RX);
+    DL_UART_clearInterruptStatus(MaixCam_INST, DL_UART_INTERRUPT_RX);
 
     // 设置系统滴答优先级
     NVIC_SetPriority(SysTick_IRQn, 0);
 }
 
-// ========== UART0 中断：步进电机1 反馈接收（可选）==========
-void UART_0_INST_IRQHandler(void)
+// ========== stepper_motor1 中断：步进电机1 反馈接收（可选）==========
+void stepper_motor1_INST_IRQHandler(void)
 {
-    if (DL_UART_getEnabledInterruptStatus(UART_0_INST, DL_UART_INTERRUPT_RX) == DL_UART_INTERRUPT_RX)
+    if (DL_UART_getEnabledInterruptStatus(stepper_motor1_INST, DL_UART_INTERRUPT_RX) == DL_UART_INTERRUPT_RX)
     {
-        uint8_t ch = DL_UART_receiveData(UART_0_INST);
+        uint8_t ch = DL_UART_receiveData(stepper_motor1_INST);
         // 如果需要处理步进电机1的返回数据，在这里添加
         // 例如：stepper1_rx_buf[stepper1_index++] = ch;
-        DL_UART_clearInterruptStatus(UART_0_INST, DL_UART_INTERRUPT_RX);
+        DL_UART_clearInterruptStatus(stepper_motor1_INST, DL_UART_INTERRUPT_RX);
     }
 }
 
-// ========== UART1 中断：MaixCam 视觉数据接收 ==========
-void UART_1_INST_IRQHandler(void)
+// ========== MaixCam 中断：MaixCam 视觉数据接收 ==========
+void MaixCam_INST_IRQHandler(void)
 {
-    if (DL_UART_getEnabledInterruptStatus(UART_1_INST, DL_UART_INTERRUPT_RX) == DL_UART_INTERRUPT_RX)
+    if (DL_UART_getEnabledInterruptStatus(MaixCam_INST, DL_UART_INTERRUPT_RX) == DL_UART_INTERRUPT_RX)
     {
-        uint8_t ch = DL_UART_receiveData(UART_1_INST);
+        uint8_t ch = DL_UART_receiveData(MaixCam_INST);
         // 调用你自己的 MaixCam 数据解析函数
         // MaixCam_Data_Receive(ch);
-        DL_UART_clearInterruptStatus(UART_1_INST, DL_UART_INTERRUPT_RX);
+        DL_UART_clearInterruptStatus(MaixCam_INST, DL_UART_INTERRUPT_RX);
     }
 }
 
-// ========== UART2 中断：步进电机2 反馈接收（可选）==========
-void UART_2_INST_IRQHandler(void)
+// ========== stepper_motor2 中断：步进电机2 反馈接收（可选）==========
+void stepper_motor2_INST_IRQHandler(void)
 {
-    if (DL_UART_getEnabledInterruptStatus(UART_2_INST, DL_UART_INTERRUPT_RX) == DL_UART_INTERRUPT_RX)
+    if (DL_UART_getEnabledInterruptStatus(stepper_motor2_INST, DL_UART_INTERRUPT_RX) == DL_UART_INTERRUPT_RX)
     {
-        uint8_t ch = DL_UART_receiveData(UART_2_INST);
+        uint8_t ch = DL_UART_receiveData(stepper_motor2_INST);
         // 如果需要处理步进电机2的返回数据，在这里添加
         // 例如：stepper2_rx_buf[stepper2_index++] = ch;
-        DL_UART_clearInterruptStatus(UART_2_INST, DL_UART_INTERRUPT_RX);
+        DL_UART_clearInterruptStatus(stepper_motor2_INST, DL_UART_INTERRUPT_RX);
     }
 }
 
@@ -84,21 +84,21 @@ void UART_SendByte(UART_Regs *port, uint8_t data)
     DL_UART_Main_transmitDataBlocking(port, data);
 }
 
-// 针对两个步进电机的便捷发送函数（假设使用 UART0 和 UART2）
+// 针对两个步进电机的便捷发送函数
 void Stepper1_Send(uint8_t *cmd, uint32_t len)
 {
-    UART_SendBytes(UART_0_INST, cmd, len);
+    UART_SendBytes(stepper_motor1_INST, cmd, len);
 }
 
 void Stepper2_Send(uint8_t *cmd, uint32_t len)
 {
-    UART_SendBytes(UART_2_INST, cmd, len);
+    UART_SendBytes(stepper_motor2_INST, cmd, len);
 }
 
-// printf 重定向到 UART0（调试用）
+// printf 重定向到 stepper_motor1（调试用）
 int fputc(int ch, FILE *f)
 {
-    DL_UART_Main_transmitDataBlocking(UART_0_INST, ch);
+    DL_UART_Main_transmitDataBlocking(stepper_motor1_INST, ch);
     return ch;
 }
 

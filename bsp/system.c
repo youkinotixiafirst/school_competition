@@ -26,7 +26,7 @@ void ncontroller_set_priority(void)
 	irq_poriority[8]=__NVIC_GetPriority(UART1_INT_IRQn);
 	irq_poriority[9]=__NVIC_GetPriority(UART2_INT_IRQn);
 	irq_poriority[10]=__NVIC_GetPriority(UART3_INT_IRQn);
-	irq_poriority[11]=__NVIC_GetPriority(ADC0_INT_IRQn);
+
 }
 
 //·µ»Ø us

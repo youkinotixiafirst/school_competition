@@ -1,7 +1,6 @@
 
 #include "datatype.h"
 
-void SystickInit(void);
 
 uint32_t micros(void);
 uint32_t millis(void);
