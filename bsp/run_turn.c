@@ -33,6 +33,7 @@ static float relative_angle = 0;
 static SharpTurnState sharp_state = SHARP_DELAY;
 static uint8_t turn_complete_count = 0;  // 转向完成次数计数
 static uint8_t run_turn_enabled = 1;     // 是否启用转向逻辑（停机标志）
+static uint16_t stabilize_timer = 0;     // 脱轨稳定缓冲计时（200Hz计数）
 
 
 /*======================== 获取状态接口 ========================*/
@@ -81,8 +82,13 @@ void run_straight(void)
     float turn_val;
     gray_turn_control_200hz(&turn_val);
 
-    speed_expect[0] = speed_setup + turn_val * turn_scale;
-    speed_expect[1] = speed_setup - turn_val * turn_scale;
+    // 陀螺仪阻尼：用Z轴角速度抵抗偏航趋势
+    float gyro_z = smartcar_imu.gyro_dps.z;
+    float gyro_damping = -gyro_z * 0.25f;
+    gyro_damping = constrain_float(gyro_damping, -5.0f, 5.0f);
+
+    speed_expect[0] = speed_setup + turn_val * turn_scale ;
+    speed_expect[1] = speed_setup - turn_val * turn_scale ;
 
     last_turn_output = turn_val;   // 保持转向方向记录，丢线时使用
 }
@@ -120,13 +126,13 @@ void run_curve(void)
 
     if (error_abs >= 6)
     {
-        current_speed = 12.0f;
-        scale = 0.30f;
+        current_speed = 40.0f;
+        scale = 0.15f;
     }
     else
     {
-        current_speed = 16.0f;
-        scale = 0.25f;
+        current_speed = 50.0f;
+        scale = 0.10f;
     }
 
     speed_expect[0] = current_speed + turn_val * scale;
@@ -208,7 +214,7 @@ void run_sharp_turn(void)
             speed_expect[0] = 0;
             speed_expect[1] = 0;
 
-            if (millis() - stop_start_time >= 500)
+            if (millis() - stop_start_time >= 1000)
             {
                 sharp_state = SHARP_TURN;
             }
@@ -216,20 +222,16 @@ void run_sharp_turn(void)
             break;
         }
 
-        /*---------- 原地转向 ----------*/
+        /*---------- 原地转向（PD闭环） ----------*/
         case SHARP_TURN:
         {
             static float start_yaw = 0;
-            static float filtered_delta = 0;
             static uint8_t started = 0;
-            static uint8_t first_sample = 1;
 
             if (!started)
             {
                 start_yaw = smartcar_imu.rpy_deg[_YAW];
-                filtered_delta = 0;
                 started = 1;
-                first_sample = 1;
             }
 
             float delta_yaw =
@@ -237,34 +239,26 @@ void run_sharp_turn(void)
             if (delta_yaw > 180.0f) delta_yaw -= 360.0f;
             if (delta_yaw < -180.0f) delta_yaw += 360.0f;
 
-            if (first_sample)
-            {
-                filtered_delta = delta_yaw;
-                first_sample = 0;
-            }
-            else
-            {
-                filtered_delta =
-                    0.95f * filtered_delta + 0.05f * delta_yaw;
-            }
+            float yaw_err = target_angle - delta_yaw;
+            if (yaw_err > 180.0f) yaw_err -= 360.0f;
+            if (yaw_err < -180.0f) yaw_err += 360.0f;
 
-            float remain = fabs(target_angle - filtered_delta);
+            float remain = fabs(yaw_err);
 
-            if (remain <= 12.0f)
+            if (remain <= 5.0f)
             {
-                // 转向完成，停车
+                // 转向完成，进入脱轨前进阶段
                 speed_expect[0] = 0;
                 speed_expect[1] = 0;
 
-                relative_angle = filtered_delta;
+                relative_angle = delta_yaw;
                 started = 0;
                 encoder_recorded = 0;
-                sharp_state = SHARP_DELAY;
                 turn_complete_count++;          // 一次转向完成计数
 
                 // 重置各种状态
                 lost_timer = 0;
-                last_turn_output = 0;
+                // last_turn_output 不重置，保持前一个有效值
                 speed_integral[0] = 0;
                 speed_integral[1] = 0;
                 speed_output[0] = 0;
@@ -276,34 +270,44 @@ void run_sharp_turn(void)
                 beep.reset = 1;
                 beep.times = 1;
 
-                // 短暂直线前进，帮助脱轨
-                speed_expect[0] = 8.0f;
-                speed_expect[1] = 8.0f;
-                speed_control_100hz(1);
-                motor_output(1);
-                delay_ms(300);
+                // 进入脱轨前进阶段
+                stop_start_time = millis();
+                sharp_state = SHARP_RELEASE;
+            }
+            else
+            {
+                // PD闭环控制：P=角度误差，D=角速度阻尼
+                float p_out = yaw_err * 0.6f;
+                float d_out = -smartcar_imu.gyro_dps.z * 0.2f;
+                float turn_pwm = p_out + d_out;
+                turn_pwm = constrain_float(turn_pwm, -35.0f, 35.0f);
 
-                // 恢复速度设定
+                speed_expect[0] = -turn_pwm;
+                speed_expect[1] = turn_pwm;
+            }
+
+            break;
+        }
+
+        /*---------- 脱轨前进 ----------*/
+        case SHARP_RELEASE:
+        {
+            // 短暂直线前进，帮助脱轨（300ms）
+            speed_expect[0] = 8.0f;
+            speed_expect[1] = 8.0f;
+
+            if (millis() - stop_start_time >= 300)
+            {
+                // 300ms后进入稳定缓冲期（防止巡线算法猛转）
+                sharp_state = SHARP_DELAY;
+                stabilize_timer = 20;  // 缓冲200ms（20×10ms）
+
                 if (low_speed_timer == 0)
-                    speed_setup = 20.0f;
+                    speed_setup = 50.0f;
                 else
                     speed_setup = 5.0f;
 
                 low_speed_timer = 60;    // 软启动计时
-            }
-            else
-            {
-                // 原地差速转向
-                int16_t turn_pwm;
-                if (remain > 30.0f)
-                    turn_pwm = (target_angle > 0) ? 25 : -25;
-                else if (remain > 15.0f)
-                    turn_pwm = (target_angle > 0) ? 15 : -15;
-                else
-                    turn_pwm = (target_angle > 0) ? 8 : -8;
-
-                speed_expect[0] = -turn_pwm;
-                speed_expect[1] = turn_pwm;
             }
 
             break;
@@ -327,20 +331,31 @@ void run_turn_logic_200hz(void)
 
     float error_abs = ABS(gray_status[0]);
 
-    /* 全白：进入急弯 */
-    if (gray_state.state == 0x0000)
+    /* 全白或正在转弯过程中：进入/继续急弯（禁用巡线） */
+    if (gray_state.state == 0x0000 || encoder_recorded)
     {
         // 只在急弯刚开始时记录转向方向，避免在急弯过程中被覆盖
         if (sharp_state == SHARP_DELAY && !encoder_recorded)
         {
-            // 此时还在正常巡线，获取一次转向值作为方向记录
-            float turn_val;
-            gray_turn_control_200hz(&turn_val);
-            last_turn_output = turn_val;
+            // 用最新的灰度偏差直接判断方向，而不是依赖过时的turn_val
+            // gray_status_backup[0][0] 是最新一次非全白时的灰度值
+            if (gray_status_backup[0][0] > 0)
+                last_turn_output = 1.0f;    // 线偏右，需要左转
+            else
+                last_turn_output = -1.0f;   // 线偏左，需要右转
         }
 
-        lost_timer = 0;   // 进入急弯后停止丢线计时
+        stabilize_timer = 0;  // 检测到全白，重置稳定缓冲
         run_sharp_turn();
+        return;
+    }
+
+    /* 脱轨稳定缓冲期内，保持直线前进，不执行巡线 */
+    if (stabilize_timer > 0)
+    {
+        stabilize_timer--;
+        speed_expect[0] = speed_setup;
+        speed_expect[1] = speed_setup;
         return;
     }
 

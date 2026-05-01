@@ -9,7 +9,8 @@ typedef enum
 {
     SHARP_DELAY,
     SHARP_WAIT,
-    SHARP_TURN
+    SHARP_TURN,
+    SHARP_RELEASE   // 转向完成后的脱轨前进
 } SharpTurnState;
 
 /* 获取状态信息的接口 */

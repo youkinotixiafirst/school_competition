@@ -1,7 +1,6 @@
 #include "ti_msp_dl_config.h"
 #include "headfile.h"
 #include "run_turn.h"
-
 // ========== 外部变量引用 ==========
 extern motor_config trackless_motor;
 extern float turn_scale;
@@ -16,7 +15,6 @@ volatile uint8_t start_flag = 0;
 
 uint16_t low_speed_timer = 0;      // 软启动计时（5ms单位）
 uint8_t mission_complete = 0;       // 任务完成标志（四转停下）
-
 // ========== 参数初始化 ==========
 void trackless_params_init(void)
 {
@@ -27,10 +25,10 @@ void trackless_params_init(void)
     trackless_motor.wheel_radius_cm = tire_radius_cm_default;
     trackless_motor.pulse_num_per_circle = pulse_cnt_per_circle_default;
 
-    speed_kp = 8.0f;
-    speed_ki = 0.3f;
-    speed_kd = 0.1f;
-    turn_scale = 0.20f;
+    speed_kp = 6.0f;
+    speed_ki = 0.2f;
+    speed_kd = 0.08f;
+    turn_scale = 0.08f;
 }
 
 void ctrl_params_init(void)
@@ -39,6 +37,7 @@ void ctrl_params_init(void)
 }
 
 // ========== 200Hz 主中断 ==========
+
 void maple_duty_200hz(void)
 {
     // 未启动时不执行
@@ -62,7 +61,7 @@ void maple_duty_200hz(void)
         low_speed_timer--;
         if (low_speed_timer == 0) 
         {
-            speed_setup = 20.0f;
+            speed_setup = 50.0f;
         }
     }
 
@@ -74,21 +73,23 @@ void maple_duty_200hz(void)
     // 转向逻辑（已拆分到run_turn.c）
     run_turn_logic_200hz();
 
-    // 速度闭环与电机输出
     speed_control_100hz(1);
     motor_output(1);
 
     // 蜂鸣器、OLED显示（保留原有布局）
     laser_light_work(&beep);
     static uint16_t disp_cnt = 0;
-    if (++disp_cnt >= 20) {
+    if (++disp_cnt >= 20) 
+    {
         disp_cnt = 0;
         float avg_speed = (NEncoder.left_motor_speed_cmps + NEncoder.right_motor_speed_cmps) * 0.5f;
         write_6_8_number(0, 0, avg_speed);
         write_6_8_number(70, 0, speed_setup);
     }
+    // OLED 显示（200ms 一次）
     static uint32_t last_show = 0;
-    if (millis() - last_show > 200) {
+    if (millis() - last_show > 200)
+    {
         last_show = millis();
         char buf[17];
         float avg_spd = (NEncoder.left_motor_speed_cmps + NEncoder.right_motor_speed_cmps) * 0.5f;
@@ -96,9 +97,11 @@ void maple_duty_200hz(void)
         LCD_P6x8Str(0, 0, (unsigned char*)buf);
         sprintf(buf, "Err:%5.1f", gray_status[0]);
         LCD_P6x8Str(0, 1, (unsigned char*)buf);
+
+        // 使用 run_turn 接口获取状态
         const char* state_str;
         SharpTurnState turn_state = get_sharp_turn_state();
-        switch (turn_state) 
+        switch (turn_state)
         {
             case SHARP_DELAY:  state_str = "DELAY    "; break;
             case SHARP_WAIT:   state_str = "WAIT     "; break;
@@ -107,19 +110,23 @@ void maple_duty_200hz(void)
         }
         sprintf(buf, "State:%s", state_str);
         LCD_P6x8Str(0, 2, (unsigned char*)buf);
-				float relative = get_relative_angle();
+
+        float relative = get_relative_angle();
         float target = get_target_angle();
         sprintf(buf, "Ang:%5.1f/%4.1f", relative, target);
         LCD_P6x8Str(0, 3, (unsigned char*)buf);
+
         sprintf(buf, "GyroZ:%+5.1f", smartcar_imu.gyro_dps.z);
         LCD_P6x8Str(0, 4, (unsigned char*)buf);
-        LCD_clear_L(0, 5);
+        
+        // 可选：显示转向计数
+        sprintf(buf, "Turn:%d", get_turn_complete_count());
+        LCD_P6x8Str(0, 5, (unsigned char*)buf);
     }
 }
 
 // ========== 定时器回调 ==========
-void duty_100hz(void) {}
-void duty_10hz(void) {}
+
 void duty_1000hz(void)
 {
     gpio_input_check_channel_12_2024();   // 更新灰度
@@ -168,6 +175,10 @@ int main(void)
         if (_button.state[UP].press == SHORT_PRESS ||
             (_button.state[ME_3D].press == SHORT_PRESS)) {
             start_flag = 1;
+						speed_integral[0] = 0;
+						speed_integral[1] = 0;
+						speed_output[0] = 0;
+						speed_output[1] = 0;
             speed_setup = 5.0f;
             low_speed_timer = 200;
             break;
