@@ -48,7 +48,7 @@ void maple_duty_200hz(void)
 
     // 任务完成判断：转向4次后停机
     uint8_t turn_count = get_turn_complete_count();
-    if (turn_count >= 4 && !mission_complete)
+    if (turn_count >= 5 && !mission_complete)
     {
         mission_complete = 1;
         speed_setup = 0;
@@ -179,8 +179,8 @@ int main(void)
 						speed_integral[1] = 0;
 						speed_output[0] = 0;
 						speed_output[1] = 0;
-            speed_setup = 5.0f;
-            low_speed_timer = 200;
+            speed_setup = 10.0f;
+            low_speed_timer=200;
             break;
         }
         delay_ms(10);
@@ -193,6 +193,6 @@ int main(void)
     delay_ms(1000);
 
     while (1) {
-        delay_ms(100);
+        delay_ms(10);
     }
 }

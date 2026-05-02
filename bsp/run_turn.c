@@ -1,9 +1,11 @@
 /*======================== run_turn.c ========================*/
 #include "run_turn.h"
 /* 参数 */
-#define TARGET_DISTANCE_CM  14.0f
+#define TARGET_DISTANCE_CM1  14.0f
+#define TARGET_DISTANCE_CM2  4.0f
 #define PULSE_PER_CM  (pulse_cnt_per_circle_default / (2.0f * 3.1415926f * tire_radius_cm_default))
-#define TARGET_PULSE   ((int32_t)(TARGET_DISTANCE_CM * PULSE_PER_CM))
+#define TARGET_PULSE1   ((int32_t)(TARGET_DISTANCE_CM1 * PULSE_PER_CM))
+#define TARGET_PULSE2   ((int32_t)(TARGET_DISTANCE_CM2 * PULSE_PER_CM))
 /* 外部变量 */
 extern float gray_status[2];
 extern _gray_state gray_state;
@@ -27,8 +29,7 @@ static uint8_t encoder_recorded = 0;
 
 static float target_angle = 0;
 static uint32_t stop_start_time = 0;
-float relative_angle = 0;
-static float current_delta_yaw = 0;  // 当前转过的角度（实时显示用）
+ float current_delta_yaw ;  // 当前转过的角度（实时显示用）
 
 /* 急弯状态变量 */
 static SharpTurnState sharp_state = SHARP_DELAY;
@@ -48,19 +49,16 @@ float get_target_angle(void)
     return target_angle;
 }
 
-float get_relative_angle(void)
+
+
+uint8_t get_turn_complete_count(void)
 {
-    return relative_angle;
+    return turn_complete_count;
 }
 
 float get_current_delta_yaw(void)
 {
     return current_delta_yaw;
-}
-
-uint8_t get_turn_complete_count(void)
-{
-    return turn_complete_count;
 }
 
 void reset_turn_complete_count(void)
@@ -87,7 +85,7 @@ void run_straight(void)
 {
     float turn_val;
     gray_turn_control_200hz(&turn_val);
-    //speed_setup = 50;
+
     // 陀螺仪阻尼：用Z轴角速度抵抗偏航趋势
     float gyro_z = smartcar_imu.gyro_dps.z;
     float gyro_damping = -gyro_z * 0.25f;
@@ -172,30 +170,40 @@ void run_sharp_turn(void)
                 (NEncoder.left_motor_total_cnt +
                  NEncoder.right_motor_total_cnt) / 2;
             int32_t traveled_pulse = now_pulse - start_encoder_pulse;
-
-            if (traveled_pulse >= TARGET_PULSE)
+						
+						
+						if (turn_complete_count <= 1)
+						{
+						
+						
+						
+						
+            if (traveled_pulse >= TARGET_PULSE1)
             {
                 // 前进距离足够，停车并准备转向
                 speed_expect[0] = 0;
                 speed_expect[1] = 0;
-								if (turn_complete_count==0)
-								{
-										speed_integral[0] = 0;
-										speed_integral[1] = 0;
-										speed_output[0] = 0;
-										speed_output[1] = 0;
-								}
-                else
-                {
-										
-								
-								}								
+								speed_integral[0] = 0;
+							  speed_integral[1] = 0;
+								speed_output[0] = 0;
+                speed_output[1] = 0;							
                 stop_start_time = millis();
-                
+							  
+                if(turn_complete_count == 1) 
+								{
+                if (last_turn_output > 0)
+                    target_angle = -80.0f;
+                else
+                    target_angle = 80.0f;
+							  }
+								else
+								{
                 if (last_turn_output > 0)
                     target_angle = -90.0f;
                 else
-                    target_angle = 90.0f;
+                    target_angle = 90.0f;													
+								}
+
 
                 sharp_state = SHARP_WAIT;
                 yaw_recorded = 0;   // 下一阶段不再需要
@@ -221,16 +229,56 @@ void run_sharp_turn(void)
                 speed_expect[0] = straight_speed - correction;
                 speed_expect[1] = straight_speed + correction;
             }
+					  }
+						else
+						{
+            if (traveled_pulse >= TARGET_PULSE2)
+            {
+                // 前进距离足够，停车并准备转向
+                speed_expect[0] = 0;
+                speed_expect[1] = 0;
+								if (last_turn_output > 0)
+                    target_angle = -90.0f;
+                else
+                    target_angle = 90.0f;
+                stop_start_time = millis();
 
+                sharp_state = SHARP_WAIT;
+                yaw_recorded = 0;   // 下一阶段不再需要
+            }
+            else
+            {
+                // 直线前进，带 IMU 航向保持
+                float straight_speed = 10.0f;
+
+                if (!yaw_recorded)
+                {
+                    start_yaw_delay = smartcar_imu.rpy_deg[_YAW];
+                    yaw_recorded = 1;
+                }
+
+                float yaw_err = smartcar_imu.rpy_deg[_YAW] - start_yaw_delay;
+                if (yaw_err > 180.0f) yaw_err -= 360.0f;
+                if (yaw_err < -180.0f) yaw_err += 360.0f;
+
+                float correction = yaw_err * 0.3f;
+                correction = constrain_float(correction, -3.0f, 3.0f);
+
+                speed_expect[0] = straight_speed - correction;
+                speed_expect[1] = straight_speed + correction;
+            }						
+						}
             break;
         }
+			
 
         /*---------- 停车等待 ----------*/
         case SHARP_WAIT:
         {
             speed_expect[0] = 0;
             speed_expect[1] = 0;
-            if (turn_complete_count==0)
+
+            if (turn_complete_count<=1)
 						{							
 								if (millis() - stop_start_time >= 500)
 								{
@@ -239,7 +287,7 @@ void run_sharp_turn(void)
 						}
 						else
 						{
-								if (millis() - stop_start_time >= 300)
+								if (millis() - stop_start_time >= 30)
 								{
 										sharp_state = SHARP_TURN;
 								}
@@ -263,9 +311,7 @@ void run_sharp_turn(void)
                 smartcar_imu.rpy_deg[_YAW] - start_yaw;
             if (delta_yaw > 180.0f) delta_yaw -= 360.0f;
             if (delta_yaw < -180.0f) delta_yaw += 360.0f;
-
-            current_delta_yaw = delta_yaw;  // 实时更新当前转角
-
+                current_delta_yaw = delta_yaw;
             float yaw_err = target_angle - delta_yaw;
             if (yaw_err > 180.0f) yaw_err -= 360.0f;
             if (yaw_err < -180.0f) yaw_err += 360.0f;
@@ -278,7 +324,7 @@ void run_sharp_turn(void)
                 speed_expect[0] = 0;
                 speed_expect[1] = 0;
 
-                relative_angle = delta_yaw;
+
                 started = 0;
                 encoder_recorded = 0;
                 turn_complete_count++;          // 一次转向完成计数
@@ -304,7 +350,7 @@ void run_sharp_turn(void)
             else
             {
                 // PD闭环控制：P=角度误差，D=角速度阻尼
-                float p_out = yaw_err * 1.4;
+                float p_out = yaw_err * 1.4f;
                 float d_out = -smartcar_imu.gyro_dps.z * 0.2f;
                 float turn_pwm = p_out + d_out;
                 turn_pwm = constrain_float(turn_pwm, -100.0f, 100.0f);
