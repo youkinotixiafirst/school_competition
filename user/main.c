@@ -111,7 +111,7 @@ void maple_duty_200hz(void)
         sprintf(buf, "State:%s", state_str);
         LCD_P6x8Str(0, 2, (unsigned char*)buf);
 
-        float relative = get_relative_angle();
+        float relative = get_current_delta_yaw();  // 显示当前转过的角度
         float target = get_target_angle();
         sprintf(buf, "Ang:%5.1f/%4.1f", relative, target);
         LCD_P6x8Str(0, 3, (unsigned char*)buf);

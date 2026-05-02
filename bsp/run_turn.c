@@ -27,7 +27,8 @@ static uint8_t encoder_recorded = 0;
 
 static float target_angle = 0;
 static uint32_t stop_start_time = 0;
-static float relative_angle = 0;
+float relative_angle = 0;
+static float current_delta_yaw = 0;  // 当前转过的角度（实时显示用）
 
 /* 急弯状态变量 */
 static SharpTurnState sharp_state = SHARP_DELAY;
@@ -50,6 +51,11 @@ float get_target_angle(void)
 float get_relative_angle(void)
 {
     return relative_angle;
+}
+
+float get_current_delta_yaw(void)
+{
+    return current_delta_yaw;
 }
 
 uint8_t get_turn_complete_count(void)
@@ -257,6 +263,8 @@ void run_sharp_turn(void)
                 smartcar_imu.rpy_deg[_YAW] - start_yaw;
             if (delta_yaw > 180.0f) delta_yaw -= 360.0f;
             if (delta_yaw < -180.0f) delta_yaw += 360.0f;
+
+            current_delta_yaw = delta_yaw;  // 实时更新当前转角
 
             float yaw_err = target_angle - delta_yaw;
             if (yaw_err > 180.0f) yaw_err -= 360.0f;

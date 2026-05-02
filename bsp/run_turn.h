@@ -17,6 +17,7 @@ typedef enum
 SharpTurnState get_sharp_turn_state(void);
 float get_target_angle(void);
 float get_relative_angle(void);
+float get_current_delta_yaw(void);  // 获取当前转过的角度（实时显示用）
 
 /* 转向计数接口 */
 uint8_t get_turn_complete_count(void);
