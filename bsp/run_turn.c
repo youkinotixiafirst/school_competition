@@ -176,9 +176,9 @@ void run_sharp_turn(void)
                 stop_start_time = millis();
 
                 if (last_turn_output > 0)
-                    target_angle = -85.0f;
+                    target_angle = -90.0f;
                 else
-                    target_angle = 85.0f;
+                    target_angle = 90.0f;
 
                 sharp_state = SHARP_WAIT;
                 yaw_recorded = 0;   // 下一阶段不再需要
@@ -301,7 +301,7 @@ void run_sharp_turn(void)
                 // 300ms后进入稳定缓冲期（防止巡线算法猛转）
                 sharp_state = SHARP_DELAY;
                 stabilize_timer = 20;  // 缓冲200ms（20×10ms）
-
+                last_turn_output = 0;   // 重置转向记录，进入正常巡线
                 if (low_speed_timer == 0)
                     speed_setup = 50.0f;
                 else
@@ -337,12 +337,18 @@ void run_turn_logic_200hz(void)
         // 只在急弯刚开始时记录转向方向，避免在急弯过程中被覆盖
         if (sharp_state == SHARP_DELAY && !encoder_recorded)
         {
-            // 用最新的灰度偏差直接判断方向，而不是依赖过时的turn_val
-            // gray_status_backup[0][0] 是最新一次非全白时的灰度值
-            if (gray_status_backup[0][0] > 0)
-                last_turn_output = 1.0f;    // 线偏右，需要左转
-            else
-                last_turn_output = -1.0f;   // 线偏左，需要右转
+            uint16_t pattern = last_valid_gray_state;
+    
+            // 左侧传感器变黑（高位有1）→ 黑线在左边 → 车需左转
+            if (pattern & 0x0F00)   // bit11 ~ bit8 或更宽，可根据传感器布局缩小范围
+            {
+                last_turn_output = -1.0f;   // 左转（对应 target_angle = -90°）
+            }
+            // 右侧传感器变黑（低位有1）→ 黑线在右边 → 车需右转
+            else if (pattern & 0x000F)  // bit7 ~ bit0
+            {
+                last_turn_output = 1.0f;    // 右转（对应 target_angle = 90°）
+            }
         }
 
         stabilize_timer = 0;  // 检测到全白，重置稳定缓冲

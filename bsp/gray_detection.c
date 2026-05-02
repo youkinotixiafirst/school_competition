@@ -20,6 +20,7 @@ controller seektrack_ctrl[2];
 uint8_t pause_line_detected = 0;
 // 外部变量声明（在 main.c 或 motor_control.c 中定义）
 extern LOCK_STATE unlock_flag;
+uint16_t last_valid_gray_state = 0;
 
 #define read_gray_bit1   ((PORTA_PORT->DIN31_0 & PORTA_GRAY_BIT0_PIN ) ? 0x01 : 0x00)
 #define read_gray_bit2   ((PORTA_PORT->DIN31_0 & PORTA_GRAY_BIT1_PIN ) ? 0x01 : 0x00)
@@ -101,15 +102,17 @@ void gpio_input_check_channel_12_2024(void)
             break;
         default:
             break;
-}
+    }
+    // 保存最近一次有效的灰度状态（用于急弯方向判断）
+    static uint16_t last_valid_gray_state = 0;
+    if (gray_state.state != 0x0000) 
+    {
+        last_valid_gray_state = gray_state.state;
+    }
+// 将 last_valid_gray_state 声明为可被 run_turn.c 引用的全局变量
+// 简单起见，直接在 gray_detection.c 里定义，并在 run_turn.h 中声明外部引用。
 // 在 gpio_input_check_channel_12_2024() 函数末尾，计算完 gray_status[0] 后添加：
-// 横向黑线检测（中间4路为黑，最外侧两路为白）
-        pause_line_detected = 0;
-if (gray_state.gray_bit[2] && gray_state.gray_bit[3] && gray_state.gray_bit[4] && gray_state.gray_bit[5] &&
-    gray_state.gray_bit[6] && gray_state.gray_bit[7] && gray_state.gray_bit[8] && gray_state.gray_bit[9]) 
-			{
-				pause_line_detected = 1;
-			}
+
     
 }
 
