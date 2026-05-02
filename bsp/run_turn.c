@@ -1,7 +1,7 @@
 /*======================== run_turn.c ========================*/
 #include "run_turn.h"
 /* 参数 */
-#define TARGET_DISTANCE_CM  4.0f
+#define TARGET_DISTANCE_CM  14.0f
 #define PULSE_PER_CM  (pulse_cnt_per_circle_default / (2.0f * 3.1415926f * tire_radius_cm_default))
 #define TARGET_PULSE   ((int32_t)(TARGET_DISTANCE_CM * PULSE_PER_CM))
 /* 外部变量 */
@@ -81,7 +81,7 @@ void run_straight(void)
 {
     float turn_val;
     gray_turn_control_200hz(&turn_val);
-
+    //speed_setup = 50;
     // 陀螺仪阻尼：用Z轴角速度抵抗偏航趋势
     float gyro_z = smartcar_imu.gyro_dps.z;
     float gyro_damping = -gyro_z * 0.25f;
@@ -172,9 +172,12 @@ void run_sharp_turn(void)
                 // 前进距离足够，停车并准备转向
                 speed_expect[0] = 0;
                 speed_expect[1] = 0;
-
+								speed_integral[0] = 0;
+								speed_integral[1] = 0;
+								speed_output[0] = 0;
+								speed_output[1] = 0;                
                 stop_start_time = millis();
-
+                
                 if (last_turn_output > 0)
                     target_angle = -90.0f;
                 else
@@ -214,7 +217,7 @@ void run_sharp_turn(void)
             speed_expect[0] = 0;
             speed_expect[1] = 0;
 
-            if (millis() - stop_start_time >= 1000)
+            if (millis() - stop_start_time >= 500)
             {
                 sharp_state = SHARP_TURN;
             }
@@ -277,10 +280,10 @@ void run_sharp_turn(void)
             else
             {
                 // PD闭环控制：P=角度误差，D=角速度阻尼
-                float p_out = yaw_err * 0.6f;
+                float p_out = yaw_err * 1.4;
                 float d_out = -smartcar_imu.gyro_dps.z * 0.2f;
                 float turn_pwm = p_out + d_out;
-                turn_pwm = constrain_float(turn_pwm, -35.0f, 35.0f);
+                turn_pwm = constrain_float(turn_pwm, -100.0f, 100.0f);
 
                 speed_expect[0] = -turn_pwm;
                 speed_expect[1] = turn_pwm;
