@@ -172,10 +172,18 @@ void run_sharp_turn(void)
                 // 前进距离足够，停车并准备转向
                 speed_expect[0] = 0;
                 speed_expect[1] = 0;
-								speed_integral[0] = 0;
-								speed_integral[1] = 0;
-								speed_output[0] = 0;
-								speed_output[1] = 0;                
+								if (turn_complete_count==0)
+								{
+										speed_integral[0] = 0;
+										speed_integral[1] = 0;
+										speed_output[0] = 0;
+										speed_output[1] = 0;
+								}
+                else
+                {
+										
+								
+								}								
                 stop_start_time = millis();
                 
                 if (last_turn_output > 0)
@@ -189,7 +197,7 @@ void run_sharp_turn(void)
             else
             {
                 // 直线前进，带 IMU 航向保持
-                float straight_speed = 5.0f;
+                float straight_speed = 10.0f;
 
                 if (!yaw_recorded)
                 {
@@ -216,12 +224,20 @@ void run_sharp_turn(void)
         {
             speed_expect[0] = 0;
             speed_expect[1] = 0;
-
-            if (millis() - stop_start_time >= 500)
-            {
-                sharp_state = SHARP_TURN;
-            }
-
+            if (turn_complete_count==0)
+						{							
+								if (millis() - stop_start_time >= 500)
+								{
+										sharp_state = SHARP_TURN;
+								}
+						}
+						else
+						{
+								if (millis() - stop_start_time >= 300)
+								{
+										sharp_state = SHARP_TURN;
+								}
+						}
             break;
         }
 
@@ -299,7 +315,7 @@ void run_sharp_turn(void)
             speed_expect[0] = 8.0f;
             speed_expect[1] = 8.0f;
 
-            if (millis() - stop_start_time >= 300)
+            if (millis() - stop_start_time >= 30)
             {
                 // 300ms后进入稳定缓冲期（防止巡线算法猛转）
                 sharp_state = SHARP_DELAY;
