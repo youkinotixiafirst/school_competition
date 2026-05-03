@@ -36,7 +36,7 @@ static SharpTurnState sharp_state = SHARP_DELAY;
 static uint8_t white_state_count = 0;  // 转向完成次数计数
 static uint8_t run_turn_enabled = 1;     // 是否启用转向逻辑（停机标志）
 static uint16_t stabilize_timer = 0;     // 脱轨稳定缓冲计时（200Hz计数）
-
+int32_t last_turn_finish_pulse = 0; 
 
 /*======================== 获取状态接口 ========================*/
 SharpTurnState get_sharp_turn_state(void)
@@ -130,12 +130,12 @@ void run_curve(void)
 
     if (error_abs >= 6)
     {
-        current_speed = 40.0f;
+        current_speed = 50.0f;
         scale = 0.15f;
     }
     else
     {
-        current_speed = 50.0f;
+        current_speed = 60.0f;
         scale = 0.10f;
     }
 
@@ -172,7 +172,7 @@ void run_sharp_turn(void)
             int32_t traveled_pulse = now_pulse - start_encoder_pulse;
 						
 						
-						if (white_state_count <= 1)
+						if (white_state_count == 0)
 						{
 						
 						
@@ -189,7 +189,7 @@ void run_sharp_turn(void)
                 speed_output[1] = 0;							
                 stop_start_time = millis();
 							  
-                if(white_state_count == 1) 
+                if(white_state_count == 0) 
 								{
                 if (last_turn_output > 0)
                     target_angle = -90.0f;
@@ -278,7 +278,7 @@ void run_sharp_turn(void)
             speed_expect[0] = 0;
             speed_expect[1] = 0;
 
-            if (white_state_count<=1)
+            if (white_state_count == 0)
 						{							
 								if (millis() - stop_start_time >= 500)
 								{
@@ -373,14 +373,16 @@ void run_sharp_turn(void)
 
             if (millis() - stop_start_time >= 30)
             {
+                // 【新增】此时转弯彻底结束，记录此时的编码器平均值，作为下一段直道的起点
+                last_turn_finish_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2; 							
                 // 300ms后进入稳定缓冲期（防止巡线算法猛转）
                 sharp_state = SHARP_DELAY;
                 stabilize_timer = 20;  // 缓冲200ms（20×10ms）
                 last_turn_output = 0;   // 重置转向记录，进入正常巡线
                 if (low_speed_timer == 0)
-                    speed_setup = 50.0f;
+                    speed_setup = 60.0f;
                 else
-                    speed_setup = 5.0f;
+                    speed_setup = 10.0f;
 
                 low_speed_timer = 60;    // 软启动计时
             }

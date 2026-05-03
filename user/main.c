@@ -93,9 +93,28 @@ if (turn_count >= 5 && mission_complete == 0)
         low_speed_timer--;
         if (low_speed_timer == 0) 
         {
-            speed_setup = 50.0f;
+            speed_setup = 60.0f;
         }
     }
+    else if (mission_complete == 0) 
+    {
+        // 1. 获取当前平均脉冲位置
+        int32_t current_avg_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
+        
+        // 2. 计算距离上一次转弯结束跑了多少脉冲
+        int32_t distance_pulse = current_avg_pulse - last_turn_finish_pulse;
+
+        // 3. 距离判断：跑够65cm立刻降速备战直角弯
+        if (distance_pulse >= DECEL_THRESHOLD_PULSE)
+        {
+            speed_setup = 40.0f; // 弯前减速
+        }
+        else
+        {
+            speed_setup = 60.0f; // 直道前65cm狂飙
+        }
+    }
+
 
     // 传感器更新
     get_wheel_speed();
@@ -213,6 +232,9 @@ int main(void)
 						speed_output[1] = 0;
             speed_setup = 10.0f;
             low_speed_timer=200;
+            // 【新增】按键发车时，初始化第一段直道的起点脉冲
+            last_turn_finish_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
+							
             break;
         }
         delay_ms(10);
@@ -222,7 +244,7 @@ int main(void)
     beep.light_on_percent = 0.5f;
     beep.reset = 1;
     beep.times = 3;
-    delay_ms(1000);
+    //delay_ms(1000);
 
     while (1) {
         delay_ms(10);

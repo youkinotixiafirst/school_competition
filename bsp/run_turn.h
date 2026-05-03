@@ -18,7 +18,9 @@ SharpTurnState get_sharp_turn_state(void);
 float get_target_angle(void);
 float get_relative_angle(void);
 float get_current_delta_yaw(void);  // 获取当前转过的角度（实时显示用）
-
+extern int32_t last_turn_finish_pulse;
+#define PULSE_PER_CM  (pulse_cnt_per_circle_default / (2.0f * 3.1415926f * tire_radius_cm_default))
+#define DECEL_THRESHOLD_PULSE ((int32_t)(65.0f * PULSE_PER_CM))
 /* 转向计数接口 */
 uint8_t get_white_state_count(void);
 void reset_white_state_count(void);
