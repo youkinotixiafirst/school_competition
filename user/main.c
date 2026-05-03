@@ -1,6 +1,7 @@
 #include "ti_msp_dl_config.h"
 #include "headfile.h"
 #include "run_turn.h"
+#include "mission2.h"
 // ========== 外部变量引用 ==========
 extern motor_config trackless_motor;
 extern float turn_scale;
@@ -12,9 +13,8 @@ extern LOCK_STATE unlock_flag;
 
 LOCK_STATE unlock_flag = UNLOCK;
 volatile uint8_t start_flag = 0;
-static uint16_t stop_state_timer = 0; 
 uint16_t low_speed_timer = 0;      // 软启动计时（5ms单位）
-uint8_t mission_complete = 0;       // 任务完成标志（四转停下）
+uint8_t mission_mode = 0; 
 // ========== 参数初始化 ==========
 void trackless_params_init(void)
 {
@@ -46,49 +46,11 @@ void maple_duty_200hz(void)
         return;
     }
 
-    // 任务完成判断：识别5次全白后停机
-uint8_t turn_count = get_white_state_count();
 
-if (turn_count >= 5 && mission_complete == 0)
-{
-    mission_complete = 1;      // 进入第一阶段：主动刹车/倒车
-    set_run_turn_enabled(0);   // 禁用巡线转向逻辑
-    stop_state_timer = 0;      // 清零计时器
-
-    // 【关键优化】瞬间清空之前的速度积分，防止PID的I项（积分）"顽固"地让车往前冲
-    speed_integral[0] = 0;
-    speed_integral[1] = 0;
-}
-
-// 倒车与停车状态机（不阻塞主循环）
-		if (mission_complete == 1)
-		{
-				stop_state_timer++;
-				// 200Hz下，1个周期5ms。设置 60个周期 = 300ms 的倒车时间（可根据实际测试稍微增减）
-				if (stop_state_timer <= 60) 
-				{
-						speed_expect[0] = -50.0f;  // 给一个较小的负向期望，让车轮反转制动
-						speed_expect[1] = -50.0f;
-				}
-				else
-				{
-						mission_complete = 2; // 倒车结束，进入彻底停止阶段
-				}
-		}
-		else if (mission_complete == 2)
-		{		
-				// 彻底停车锁死
-				speed_expect[0] = 0;
-				speed_expect[1] = 0;
-    
-				// 直接把输出抹零，切断动力
-				speed_output[0] = 0;
-				speed_output[1] = 0;
-				speed_setup = 0;
-		}
-
+    // 任务完成判断
+		
     // 软启动
-    if (low_speed_timer > 0) 
+		if (low_speed_timer > 0) 
     {
         low_speed_timer--;
         if (low_speed_timer == 0) 
@@ -96,25 +58,6 @@ if (turn_count >= 5 && mission_complete == 0)
             speed_setup = 60.0f;
         }
     }
-    else if (mission_complete == 0) 
-    {
-        // 1. 获取当前平均脉冲位置
-        int32_t current_avg_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
-        
-        // 2. 计算距离上一次转弯结束跑了多少脉冲
-        int32_t distance_pulse = current_avg_pulse - last_turn_finish_pulse;
-
-        // 3. 距离判断：跑够65cm立刻降速备战直角弯
-        if (distance_pulse >= DECEL_THRESHOLD_PULSE)
-        {
-            speed_setup = 40.0f; // 弯前减速
-        }
-        else
-        {
-            speed_setup = 60.0f; // 直道前65cm狂飙
-        }
-    }
-
 
     // 传感器更新
     get_wheel_speed();
@@ -122,58 +65,24 @@ if (turn_count >= 5 && mission_complete == 0)
     trackless_ahrs_update();
 
     // 转向逻辑（已拆分到run_turn.c）
-    run_turn_logic_200hz();
+		if (mission_mode == 1)
+    {			  
+        run_turn_logic1_200hz();
+			  mission1_show();
+			  stop1();
+    }  
+ 
+   
+		if (mission_mode == 2)
+    {
+				run_turn_logic2_200hz();  
+				mission2_show();
+			  stop2();   
+    }  
 
     speed_control_100hz(1);
     motor_output(1);
 
-    // 蜂鸣器、OLED显示（保留原有布局）
-    laser_light_work(&beep);
-    static uint16_t disp_cnt = 0;
-    if (++disp_cnt >= 20) 
-    {
-        disp_cnt = 0;
-        float avg_speed = (NEncoder.left_motor_speed_cmps + NEncoder.right_motor_speed_cmps) * 0.5f;
-        write_6_8_number(0, 0, avg_speed);
-        write_6_8_number(70, 0, speed_setup);
-    }
-    // OLED 显示（200ms 一次）
-    static uint32_t last_show = 0;
-    if (millis() - last_show > 200)
-    {
-        last_show = millis();
-        char buf[17];
-        float avg_spd = (NEncoder.left_motor_speed_cmps + NEncoder.right_motor_speed_cmps) * 0.5f;
-        sprintf(buf, "Spd:%4.1f/%4.1f", avg_spd, speed_setup);
-        LCD_P6x8Str(0, 0, (unsigned char*)buf);
-        sprintf(buf, "Err:%5.1f", gray_status[0]);
-        LCD_P6x8Str(0, 1, (unsigned char*)buf);
-
-        // 使用 run_turn 接口获取状态
-        const char* state_str;
-        SharpTurnState turn_state = get_sharp_turn_state();
-        switch (turn_state)
-        {
-            case SHARP_DELAY:  state_str = "DELAY    "; break;
-            case SHARP_WAIT:   state_str = "WAIT     "; break;
-            case SHARP_TURN:   state_str = "TURN     "; break;
-            default:           state_str = "NORMAL   "; break;
-        }
-        sprintf(buf, "State:%s", state_str);
-        LCD_P6x8Str(0, 2, (unsigned char*)buf);
-
-        float relative = get_current_delta_yaw();  // 显示当前转过的角度
-        float target = get_target_angle();
-        sprintf(buf, "Ang:%5.1f/%4.1f", relative, target);
-        LCD_P6x8Str(0, 3, (unsigned char*)buf);
-
-        sprintf(buf, "GyroZ:%+5.1f", smartcar_imu.gyro_dps.z);
-        LCD_P6x8Str(0, 4, (unsigned char*)buf);
-        
-        // 可选：显示转向计数
-        sprintf(buf, "Turn:%d", get_white_state_count());
-        LCD_P6x8Str(0, 5, (unsigned char*)buf);
-    }
 }
 
 // ========== 定时器回调 ==========
@@ -221,25 +130,44 @@ int main(void)
     beep.reset = 1;
     beep.times = 1;
 
-    while (1) {
+    while (1) 
+		{
         read_button_state_all();
-        if (_button.state[UP].press == SHORT_PRESS ||
-            (_button.state[ME_3D].press == SHORT_PRESS)) {
+        if (_button.state[UP].press == SHORT_PRESS ) 
+				{
             start_flag = 1;
+					  mission_mode = 1;
 						speed_integral[0] = 0;
 						speed_integral[1] = 0;
 						speed_output[0] = 0;
 						speed_output[1] = 0;
             speed_setup = 10.0f;
             low_speed_timer=200;
-            // 【新增】按键发车时，初始化第一段直道的起点脉冲
+\
             last_turn_finish_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
 							
             break;
         }
-        delay_ms(10);
+        
+    
+		    else if (_button.state[DOWN].press == SHORT_PRESS) 
+				{
+            start_flag = 1;
+					  mission_mode = 2;
+						speed_integral[0] = 0;
+						speed_integral[1] = 0;
+						speed_output[0] = 0;
+						speed_output[1] = 0;
+            speed_setup = 10.0f;
+            low_speed_timer=200;
+					
+					  last_turn_finish_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
+					
+            break;
+        }
+				delay_ms(10);
     }
-
+		
     beep.period = 200;
     beep.light_on_percent = 0.5f;
     beep.reset = 1;

@@ -24,17 +24,19 @@ extern int32_t last_turn_finish_pulse;
 /* 转向计数接口 */
 uint8_t get_white_state_count(void);
 void reset_white_state_count(void);
-void set_run_turn_enabled(uint8_t enabled);
+void set_run_turn_enabled1(uint8_t enabled);
 
 /* 主调度 */
-void run_turn_logic_200hz(void);
+void run_turn_logic1_200hz(void);
 
 /* 功能拆分 */
 void run_straight(void);      // 直线
 void run_curve(void);         // 普通弯道
 void run_sharp_turn(void);    // 急弯/直角弯
-
+void stop1(void);
 /* 初始化 */
 void run_turn_init(void);
-
+void mission1_show(void);
+extern uint8_t mission1_complete ;       // 任务完成标志（四转停下）
+static uint16_t stop_state_timer = 0; 
 #endif

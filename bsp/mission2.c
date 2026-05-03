@@ -1,5 +1,5 @@
 /*======================== run_turn.c ========================*/
-#include "run_turn.h"
+#include "mission2.h"
 /* 参数 */
 #define TARGET_DISTANCE_CM1  14.0f
 #define TARGET_DISTANCE_CM2  4.0f
@@ -29,51 +29,51 @@ static uint8_t encoder_recorded = 0;
 
 static float target_angle = 0;
 static uint32_t stop_start_time = 0;
- float current_delta_yaw ;  // 当前转过的角度（实时显示用）
+ float current_delta_yaw2 ;  // 当前转过的角度（实时显示用）
 
 /* 急弯状态变量 */
-static SharpTurnState sharp_state = SHARP_DELAY;
+static SharpTurnState2 sharp_state = SHARP_DELAY2;
 static uint8_t white_state_count = 0;  // 转向完成次数计数
-static uint8_t run_turn_enabled1 = 1;     // 是否启用转向逻辑（停机标志）
+static uint8_t run_turn_enabled2 = 1;     // 是否启用转向逻辑（停机标志）
 static uint16_t stabilize_timer = 0;     // 脱轨稳定缓冲计时（200Hz计数）
-int32_t last_turn_finish_pulse = 0; 
-uint8_t mission1_complete = 0; 
+int32_t last_turn_finish_pulse2 = 0; 
+uint8_t mission2_complete = 0;
 /*======================== 获取状态接口 ========================*/
-SharpTurnState get_sharp_turn_state(void)
+SharpTurnState2 get_sharp_turn_state2(void)
 {
     return sharp_state;
 }
 
-float get_target_angle(void)
+float get_target_angle2(void)
 {
     return target_angle;
 }
 
 
 
-uint8_t get_white_state_count(void)
+uint8_t get_white_state_count2(void)
 {
     return white_state_count;
 }
 
-float get_current_delta_yaw(void)
+float get_current_delta_yaw2(void)
 {
-    return current_delta_yaw;
+    return current_delta_yaw2;
 }
 
-void reset_white_state_count(void)
+void reset_white_state_count2(void)
 {
     white_state_count = 0;
 }
 
-void set_run_turn_enabled1(uint8_t enabled)
+void set_run_turn_enabled2(uint8_t enabled)
 {
-    run_turn_enabled1 = enabled;
+    run_turn_enabled2 = enabled;
 }
 
 
 /*======================== 初始化 ========================*/
-void run_turn_init(void)
+void run_turn_init2(void)
 {
     lost_timer = 0;
     last_turn_output = 0;
@@ -81,7 +81,7 @@ void run_turn_init(void)
 
 
 /*======================== 直线 ========================*/
-void run_straight(void)
+void run_straight2(void)
 {
     float turn_val;
     gray_turn_control_200hz(&turn_val);
@@ -99,7 +99,7 @@ void run_straight(void)
 
 
 /*======================== 普通弯道 ========================*/
-void run_curve(void)
+void run_curve2(void)
 {
     float turn_val;
     gray_turn_control_200hz(&turn_val);
@@ -147,12 +147,12 @@ void run_curve(void)
 
 
 /*======================== 急弯/直角弯 ========================*/
-void run_sharp_turn(void)
+void run_sharp_turn2(void)
 {
     switch (sharp_state)
     {
         /*---------- 延迟前进 ----------*/
-        case SHARP_DELAY:
+        case SHARP_DELAY2:
         {
             static float start_yaw_delay = 0;
             static uint8_t yaw_recorded = 0;
@@ -172,14 +172,10 @@ void run_sharp_turn(void)
             int32_t traveled_pulse = now_pulse - start_encoder_pulse;
 						
 						
-						if (white_state_count == 0)
-						{
-						
-						
-						
-						
-            if (traveled_pulse >= TARGET_PULSE1)
-            {
+						if (white_state_count == 0 )
+						{						
+						    if (traveled_pulse >= TARGET_PULSE1)
+								{
                 // 前进距离足够，停车并准备转向
                 speed_expect[0] = 0;
                 speed_expect[1] = 0;
@@ -192,11 +188,11 @@ void run_sharp_turn(void)
                     target_angle = -90.0f;
                 else
                     target_angle = 90.0f;
-                sharp_state = SHARP_WAIT;
+                sharp_state = SHARP_WAIT2;
                 yaw_recorded = 0;   // 下一阶段不再需要
-            }
-            else
-            {
+								}
+								else
+								{
                 // 直线前进，带 IMU 航向保持
                 float straight_speed = 10.0f;
 
@@ -215,23 +211,64 @@ void run_sharp_turn(void)
 
                 speed_expect[0] = straight_speed - correction;
                 speed_expect[1] = straight_speed + correction;
-            }
+								}
 					  }
+						else if (white_state_count == 3)
+						{
+						    if (traveled_pulse >= TARGET_PULSE1)
+								{
+                // 前进距离足够，停车并准备转向
+                speed_expect[0] = 0;
+                speed_expect[1] = 0;
+								speed_integral[0] = 0;
+							  speed_integral[1] = 0;
+								speed_output[0] = 0;
+                speed_output[1] = 0;							
+                stop_start_time = millis();
+                if (last_turn_output > 0)
+                    target_angle = 180.0f;
+                else
+                    target_angle = -180.0f;
+                sharp_state = SHARP_WAIT2;
+                yaw_recorded = 0;   // 下一阶段不再需要
+								}
+								else
+								{
+                // 直线前进，带 IMU 航向保持
+                float straight_speed = 10.0f;
+
+                if (!yaw_recorded)
+                {
+                    start_yaw_delay = smartcar_imu.rpy_deg[_YAW];
+                    yaw_recorded = 1;
+                }
+
+                float yaw_err = smartcar_imu.rpy_deg[_YAW] - start_yaw_delay;
+                if (yaw_err > 180.0f) yaw_err -= 360.0f;
+                if (yaw_err < -180.0f) yaw_err += 360.0f;
+
+                float correction = yaw_err * 0.3f;
+                correction = constrain_float(correction, -3.0f, 3.0f);
+
+                speed_expect[0] = straight_speed - correction;
+                speed_expect[1] = straight_speed + correction;
+								}						
+						}
 						else
 						{
             if (traveled_pulse >= TARGET_PULSE2)
             {
                 // 前进距离足够，停车并准备转向
-                speed_expect[0] = 0;
-                speed_expect[1] = 0;
-								if (last_turn_output > 0)
-                    target_angle = -90.0f;
-                else
-                    target_angle = 90.0f;
-                stop_start_time = millis();
+										speed_expect[0] = 0;
+										speed_expect[1] = 0;
+										if (last_turn_output > 0)
+												target_angle = -90.0f;
+										else
+												target_angle = 90.0f;
+										stop_start_time = millis();
 
-                sharp_state = SHARP_WAIT;
-                yaw_recorded = 0;   // 下一阶段不再需要
+										sharp_state = SHARP_WAIT2;
+										yaw_recorded = 0;   // 下一阶段不再需要									
             }
             else
             {
@@ -260,16 +297,16 @@ void run_sharp_turn(void)
 			
 
         /*---------- 停车等待 ----------*/
-        case SHARP_WAIT:
+        case SHARP_WAIT2:
         {
             speed_expect[0] = 0;
             speed_expect[1] = 0;
 
-            if (white_state_count == 0)
+            if (white_state_count == 0 || white_state_count == 3)
 						{							
 								if (millis() - stop_start_time >= 500)
 								{
-										sharp_state = SHARP_TURN;
+										sharp_state = SHARP_TURN2;
 									  white_state_count++;
 								}
 						}
@@ -277,7 +314,7 @@ void run_sharp_turn(void)
 						{
 								if (millis() - stop_start_time >= 30)
 								{
-										sharp_state = SHARP_TURN;
+										sharp_state = SHARP_TURN2;
 									  white_state_count++;
 								}
 						}
@@ -285,7 +322,7 @@ void run_sharp_turn(void)
         }
 
         /*---------- 原地转向（PD闭环） ----------*/
-        case SHARP_TURN:
+        case SHARP_TURN2:
         {
             static float start_yaw = 0;
             static uint8_t started = 0;
@@ -300,7 +337,7 @@ void run_sharp_turn(void)
                 smartcar_imu.rpy_deg[_YAW] - start_yaw;
             if (delta_yaw > 180.0f) delta_yaw -= 360.0f;
             if (delta_yaw < -180.0f) delta_yaw += 360.0f;
-                current_delta_yaw = delta_yaw;
+                current_delta_yaw2 = delta_yaw;
             float yaw_err = target_angle - delta_yaw;
             if (yaw_err > 180.0f) yaw_err -= 360.0f;
             if (yaw_err < -180.0f) yaw_err += 360.0f;
@@ -334,13 +371,13 @@ void run_sharp_turn(void)
 
                 // 进入脱轨前进阶段
                 stop_start_time = millis();
-                sharp_state = SHARP_RELEASE;
+                sharp_state = SHARP_RELEASE2;
             }
             else
             {
                 // PD闭环控制：P=角度误差，D=角速度阻尼
                 float p_out = yaw_err * 1.4f;
-                float d_out = -smartcar_imu.gyro_dps.z * 0.2f;
+                float d_out = -smartcar_imu.gyro_dps.z * 0.35f;
                 float turn_pwm = p_out + d_out;
                 turn_pwm = constrain_float(turn_pwm, -100.0f, 100.0f);
 
@@ -352,7 +389,7 @@ void run_sharp_turn(void)
         }
 
         /*---------- 脱轨前进 ----------*/
-        case SHARP_RELEASE:
+        case SHARP_RELEASE2:
         {
             // 短暂直线前进，帮助脱轨（300ms）
             speed_expect[0] = 8.0f;
@@ -361,9 +398,9 @@ void run_sharp_turn(void)
             if (millis() - stop_start_time >= 30)
             {
                 // 【新增】此时转弯彻底结束，记录此时的编码器平均值，作为下一段直道的起点
-                last_turn_finish_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2; 							
+                last_turn_finish_pulse2 = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2; 							
                 // 300ms后进入稳定缓冲期（防止巡线算法猛转）
-                sharp_state = SHARP_DELAY;
+                sharp_state = SHARP_DELAY2;
                 stabilize_timer = 20;  // 缓冲200ms（20×10ms）
                 last_turn_output = 0;   // 重置转向记录，进入正常巡线
                 if (low_speed_timer == 0)
@@ -378,17 +415,17 @@ void run_sharp_turn(void)
         }
 
         default:
-            sharp_state = SHARP_DELAY;
+            sharp_state = SHARP_DELAY2;
             break;
     }
 }
 
 
 /*======================== 总调度 ========================*/
-void run_turn_logic1_200hz(void)
+void run_turn_logic2_200hz(void)
 {
     /* 如果禁用转向逻辑，直接返回 */
-    if (!run_turn_enabled1)
+    if (!run_turn_enabled2)
     {
         return;
     }
@@ -399,24 +436,31 @@ void run_turn_logic1_200hz(void)
     if (gray_state.state == 0x0000 || encoder_recorded)
     {
         // 只在急弯刚开始时记录转向方向，避免在急弯过程中被覆盖
-        if (sharp_state == SHARP_DELAY && !encoder_recorded)
+        if (sharp_state == SHARP_DELAY2 && !encoder_recorded)
         {
             uint16_t pattern = last_valid_gray_state;
     
-            // 左侧传感器变黑（高位有1）→ 黑线在左边 → 车需左转
-            if (pattern & 0x0F00)   // bit11 ~ bit8 或更宽，可根据传感器布局缩小范围
-            {
-                last_turn_output = -1.0f;   // 左转（对应 target_angle = -90°）
-            }
-            // 右侧传感器变黑（低位有1）→ 黑线在右边 → 车需右转
-            else if (pattern & 0x000F)  // bit7 ~ bit0
-            {
-                last_turn_output = 1.0f;    // 右转（对应 target_angle = 90°）
-            }
+    // 计算左右两侧触发的探头数量 (简单的位计算)
+						uint8_t left_weight = 0;
+						uint8_t right_weight = 0;
+    
+						for(int i=7; i<=11; i++) if(pattern & (1<<i)) left_weight++;
+						for(int i=0; i<=4; i++)  if(pattern & (1<<i)) right_weight++;
+
+						if (left_weight > right_weight) 
+						{
+						last_turn_output = -1.0f;   // 左转
+						} 
+						else if (right_weight > left_weight) 
+						{
+						last_turn_output = 1.0f;    // 右转
+						} 
+    // 如果 left_weight == right_weight，保持 last_turn_output 上一次的值不变！
+    // 这样它就会沿用上一个弯道的方向，非常适合正方形赛道！
         }
 
         stabilize_timer = 0;  // 检测到全白，重置稳定缓冲
-        run_sharp_turn();
+        run_sharp_turn2();
         return;
     }
 
@@ -432,23 +476,23 @@ void run_turn_logic1_200hz(void)
     /* 小误差：直线 */
     if (error_abs < 3)
     {
-        run_straight();
+        run_straight2();
     }
     /* 中误差：普通弯 */
     else
     {
-        run_curve();
+        run_curve2();
     }
 }
-void stop1 (void)
+void stop2 (void)
 {
-		uint8_t turn_count = get_white_state_count();
+		uint8_t turn_count = get_white_state_count2();
 
-		if (turn_count >= 5 && mission1_complete == 0)
+		if (turn_count >= 7 && mission2_complete == 0)
 		{
-				mission1_complete = 1;      // 进入第一阶段：主动刹车/倒车
-				set_run_turn_enabled1(0);   // 禁用巡线转向逻辑
-				stop_state_timer = 0;      // 清零计时器
+				mission2_complete = 1;      // 进入第一阶段：主动刹车/倒车
+				set_run_turn_enabled2(0);   // 禁用巡线转向逻辑
+				stop_state_timer2 = 0;      // 清零计时器
 
 				// 【关键优化】瞬间清空之前的速度积分，防止PID的I项（积分）"顽固"地让车往前冲
 				speed_integral[0] = 0;
@@ -456,21 +500,21 @@ void stop1 (void)
 		}
 
 // 倒车与停车状态机（不阻塞主循环）
-		if (mission1_complete == 1)
+		if (mission2_complete == 1)
 		{
-				stop_state_timer++;
+				stop_state_timer2++;
 				// 200Hz下，1个周期5ms。设置 60个周期 = 300ms 的倒车时间（可根据实际测试稍微增减）
-				if (stop_state_timer <= 60) 
+				if (stop_state_timer2 <= 60) 
 				{
 						speed_expect[0] = -50.0f;  // 给一个较小的负向期望，让车轮反转制动
 						speed_expect[1] = -50.0f;
 				}
 				else
 				{
-						mission1_complete = 2; // 倒车结束，进入彻底停止阶段
+						mission2_complete = 2; // 倒车结束，进入彻底停止阶段
 				}
 		}
-		else if (mission1_complete == 2)
+		else if (mission2_complete == 2)
 		{		
 				// 彻底停车锁死
 				speed_expect[0] = 0;
@@ -481,13 +525,13 @@ void stop1 (void)
 				speed_output[1] = 0;
 				speed_setup = 0;
 		}
-    else if (mission1_complete == 0) 
+    else if (mission2_complete == 0) 
     {
         // 1. 获取当前平均脉冲位置
         int32_t current_avg_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
         
         // 2. 计算距离上一次转弯结束跑了多少脉冲
-        int32_t distance_pulse = current_avg_pulse - last_turn_finish_pulse;
+        int32_t distance_pulse = current_avg_pulse - last_turn_finish_pulse2;
 
         // 3. 距离判断：跑够65cm立刻降速备战直角弯
 				if (low_speed_timer == 0) 
@@ -499,7 +543,7 @@ void stop1 (void)
 				}
     }
 }
-void mission1_show (void)
+void mission2_show(void)
 {
 	  laser_light_work(&beep);
     static uint16_t disp_cnt = 0;
@@ -524,19 +568,19 @@ void mission1_show (void)
 
         // 使用 run_turn 接口获取状态
         const char* state_str;
-        SharpTurnState turn_state = get_sharp_turn_state();
+        SharpTurnState2 turn_state = get_sharp_turn_state2();
         switch (turn_state)
         {
-            case SHARP_DELAY:  state_str = "DELAY    "; break;
-            case SHARP_WAIT:   state_str = "WAIT     "; break;
-            case SHARP_TURN:   state_str = "TURN     "; break;
+            case SHARP_DELAY2:  state_str = "DELAY    "; break;
+            case SHARP_WAIT2:   state_str = "WAIT     "; break;
+            case SHARP_TURN2:   state_str = "TURN     "; break;
             default:           state_str = "NORMAL   "; break;
         }
         sprintf(buf, "State:%s", state_str);
         LCD_P6x8Str(0, 2, (unsigned char*)buf);
 
-        float relative = get_current_delta_yaw();  // 显示当前转过的角度
-        float target = get_target_angle();
+        float relative = get_current_delta_yaw2();  // 显示当前转过的角度
+        float target = get_target_angle2();
         sprintf(buf, "Ang:%5.1f/%4.1f", relative, target);
         LCD_P6x8Str(0, 3, (unsigned char*)buf);
 
@@ -544,8 +588,11 @@ void mission1_show (void)
         LCD_P6x8Str(0, 4, (unsigned char*)buf);
         
         // 可选：显示转向计数
-        sprintf(buf, "Turn:%d", get_white_state_count());
+        sprintf(buf, "Turn:%d", get_white_state_count2());
         LCD_P6x8Str(0, 5, (unsigned char*)buf);
-    }
+    }	
+
+
+
 
 }
