@@ -20,8 +20,8 @@ float get_relative_angle(void);
 float get_current_delta_yaw(void);  // 获取当前转过的角度（实时显示用）
 
 /* 转向计数接口 */
-uint8_t get_turn_complete_count(void);
-void reset_turn_complete_count(void);
+uint8_t get_white_state_count(void);
+void reset_white_state_count(void);
 void set_run_turn_enabled(uint8_t enabled);
 
 /* 主调度 */

@@ -12,7 +12,7 @@ extern LOCK_STATE unlock_flag;
 
 LOCK_STATE unlock_flag = UNLOCK;
 volatile uint8_t start_flag = 0;
-
+static uint16_t stop_state_timer = 0; 
 uint16_t low_speed_timer = 0;      // 软启动计时（5ms单位）
 uint8_t mission_complete = 0;       // 任务完成标志（四转停下）
 // ========== 参数初始化 ==========
@@ -46,14 +46,46 @@ void maple_duty_200hz(void)
         return;
     }
 
-    // 任务完成判断：转向4次后停机
-    uint8_t turn_count = get_turn_complete_count();
-    if (turn_count >= 5 && !mission_complete)
-    {
-        mission_complete = 1;
-        speed_setup = 0;
-        set_run_turn_enabled(0);  // 禁用转向逻辑
-    }
+    // 任务完成判断：识别5次全白后停机
+uint8_t turn_count = get_white_state_count();
+
+if (turn_count >= 5 && mission_complete == 0)
+{
+    mission_complete = 1;      // 进入第一阶段：主动刹车/倒车
+    set_run_turn_enabled(0);   // 禁用巡线转向逻辑
+    stop_state_timer = 0;      // 清零计时器
+
+    // 【关键优化】瞬间清空之前的速度积分，防止PID的I项（积分）"顽固"地让车往前冲
+    speed_integral[0] = 0;
+    speed_integral[1] = 0;
+}
+
+// 倒车与停车状态机（不阻塞主循环）
+		if (mission_complete == 1)
+		{
+				stop_state_timer++;
+				// 200Hz下，1个周期5ms。设置 60个周期 = 300ms 的倒车时间（可根据实际测试稍微增减）
+				if (stop_state_timer <= 60) 
+				{
+						speed_expect[0] = -50.0f;  // 给一个较小的负向期望，让车轮反转制动
+						speed_expect[1] = -50.0f;
+				}
+				else
+				{
+						mission_complete = 2; // 倒车结束，进入彻底停止阶段
+				}
+		}
+		else if (mission_complete == 2)
+		{		
+				// 彻底停车锁死
+				speed_expect[0] = 0;
+				speed_expect[1] = 0;
+    
+				// 直接把输出抹零，切断动力
+				speed_output[0] = 0;
+				speed_output[1] = 0;
+				speed_setup = 0;
+		}
 
     // 软启动
     if (low_speed_timer > 0) 
@@ -120,7 +152,7 @@ void maple_duty_200hz(void)
         LCD_P6x8Str(0, 4, (unsigned char*)buf);
         
         // 可选：显示转向计数
-        sprintf(buf, "Turn:%d", get_turn_complete_count());
+        sprintf(buf, "Turn:%d", get_white_state_count());
         LCD_P6x8Str(0, 5, (unsigned char*)buf);
     }
 }

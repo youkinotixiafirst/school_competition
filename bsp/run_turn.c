@@ -33,7 +33,7 @@ static uint32_t stop_start_time = 0;
 
 /* 急弯状态变量 */
 static SharpTurnState sharp_state = SHARP_DELAY;
-static uint8_t turn_complete_count = 0;  // 转向完成次数计数
+static uint8_t white_state_count = 0;  // 转向完成次数计数
 static uint8_t run_turn_enabled = 1;     // 是否启用转向逻辑（停机标志）
 static uint16_t stabilize_timer = 0;     // 脱轨稳定缓冲计时（200Hz计数）
 
@@ -51,9 +51,9 @@ float get_target_angle(void)
 
 
 
-uint8_t get_turn_complete_count(void)
+uint8_t get_white_state_count(void)
 {
-    return turn_complete_count;
+    return white_state_count;
 }
 
 float get_current_delta_yaw(void)
@@ -61,9 +61,9 @@ float get_current_delta_yaw(void)
     return current_delta_yaw;
 }
 
-void reset_turn_complete_count(void)
+void reset_white_state_count(void)
 {
-    turn_complete_count = 0;
+    white_state_count = 0;
 }
 
 void set_run_turn_enabled(uint8_t enabled)
@@ -172,7 +172,7 @@ void run_sharp_turn(void)
             int32_t traveled_pulse = now_pulse - start_encoder_pulse;
 						
 						
-						if (turn_complete_count <= 1)
+						if (white_state_count <= 1)
 						{
 						
 						
@@ -189,12 +189,12 @@ void run_sharp_turn(void)
                 speed_output[1] = 0;							
                 stop_start_time = millis();
 							  
-                if(turn_complete_count == 1) 
+                if(white_state_count == 1) 
 								{
                 if (last_turn_output > 0)
-                    target_angle = -80.0f;
+                    target_angle = -90.0f;
                 else
-                    target_angle = 80.0f;
+                    target_angle = 90.0f;
 							  }
 								else
 								{
@@ -278,11 +278,12 @@ void run_sharp_turn(void)
             speed_expect[0] = 0;
             speed_expect[1] = 0;
 
-            if (turn_complete_count<=1)
+            if (white_state_count<=1)
 						{							
 								if (millis() - stop_start_time >= 500)
 								{
 										sharp_state = SHARP_TURN;
+									  white_state_count++;
 								}
 						}
 						else
@@ -290,6 +291,7 @@ void run_sharp_turn(void)
 								if (millis() - stop_start_time >= 30)
 								{
 										sharp_state = SHARP_TURN;
+									  white_state_count++;
 								}
 						}
             break;
@@ -327,7 +329,7 @@ void run_sharp_turn(void)
 
                 started = 0;
                 encoder_recorded = 0;
-                turn_complete_count++;          // 一次转向完成计数
+                          // 一次转向完成计数
 
                 // 重置各种状态
                 lost_timer = 0;
