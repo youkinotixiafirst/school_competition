@@ -3,7 +3,7 @@
 #include "datatype.h"
 #include "system.h"
 #include "nuart.h"
-
+#include "bluetooth_app.h"
 // 步进电机命令发送缓冲区（可选）
 // uint8_t stepper1_cmd_buf[20];
 // uint8_t stepper2_cmd_buf[20];
@@ -38,7 +38,7 @@ void UART_0_INST_IRQHandler(void)
 {
     if (DL_UART_getEnabledInterruptStatus(UART_0_INST, DL_UART_INTERRUPT_RX) == DL_UART_INTERRUPT_RX)
     {
-        uint8_t ch = DL_UART_receiveData(UART_0_INST);
+        //uint8_t ch = DL_UART_receiveData(UART_0_INST);
         // 如果需要处理步进电机1的返回数据，在这里添加
         // 例如：stepper1_rx_buf[stepper1_index++] = ch;
         DL_UART_clearInterruptStatus(UART_0_INST, DL_UART_INTERRUPT_RX);
@@ -50,7 +50,7 @@ void UART_1_INST_IRQHandler(void)
 {
     if (DL_UART_getEnabledInterruptStatus(UART_1_INST, DL_UART_INTERRUPT_RX) == DL_UART_INTERRUPT_RX)
     {
-        uint8_t ch = DL_UART_receiveData(UART_1_INST);
+        //uint8_t ch = DL_UART_receiveData(UART_1_INST);
         // 调用你自己的 MaixCam 数据解析函数
         // MaixCam_Data_Receive(ch);
         DL_UART_clearInterruptStatus(UART_1_INST, DL_UART_INTERRUPT_RX);
@@ -63,9 +63,9 @@ void UART_2_INST_IRQHandler(void)
     if (DL_UART_getEnabledInterruptStatus(UART_2_INST, DL_UART_INTERRUPT_RX) == DL_UART_INTERRUPT_RX)
     {
         uint8_t ch = DL_UART_receiveData(UART_2_INST);
-        // 如果需要处理步进电机2的返回数据，在这里添加
-        // 例如：stepper2_rx_buf[stepper2_index++] = ch;
+        bluetooth_app_prase(ch);   // 调用蓝牙协议解析
         DL_UART_clearInterruptStatus(UART_2_INST, DL_UART_INTERRUPT_RX);
+
     }
 }
 
