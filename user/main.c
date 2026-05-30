@@ -1,7 +1,9 @@
 #include "ti_msp_dl_config.h"
 #include "headfile.h"
-#include "run_turn.h"
+#include "mission1.h"
 #include "mission2.h"
+//#include "bluetooth_app.h"
+#include "mission3.h"
 // ========== 外部变量引用 ==========
 extern motor_config trackless_motor;
 extern float turn_scale;
@@ -25,8 +27,8 @@ void trackless_params_init(void)
     trackless_motor.wheel_radius_cm = tire_radius_cm_default;
     trackless_motor.pulse_num_per_circle = pulse_cnt_per_circle_default;
 
-    speed_kp = 6.0f;
-    speed_ki = 0.2f;
+    speed_kp = 3.0f;
+    speed_ki = 0.05f;
     speed_kd = 0.08f;
     turn_scale = 0.08f;
 }
@@ -50,14 +52,7 @@ void maple_duty_200hz(void)
     // 任务完成判断
 		
     // 软启动
-		if (low_speed_timer > 0) 
-    {
-        low_speed_timer--;
-        if (low_speed_timer == 0) 
-        {
-            speed_setup = 60.0f;
-        }
-    }
+
 
     // 传感器更新
     get_wheel_speed();
@@ -66,7 +61,15 @@ void maple_duty_200hz(void)
 
     // 转向逻辑（已拆分到run_turn.c）
 		if (mission_mode == 1)
-    {			  
+    {
+			  if (low_speed_timer > 0) 
+        {
+            low_speed_timer--;
+        if (low_speed_timer == 0) 
+        {
+            speed_setup = 10.0f;
+        }
+        }
         run_turn_logic1_200hz();
 			  mission1_show();
 			  stop1();
@@ -79,7 +82,13 @@ void maple_duty_200hz(void)
 				mission2_show();
 			  stop2();   
     }  
-
+		
+    if (mission_mode == 3)
+    {
+				run_turn_logic3_200hz();  
+				mission3_show();
+			  stop3();   
+    } 
     speed_control_100hz(1);
     motor_output(1);
 
@@ -125,10 +134,10 @@ int main(void)
     PPM_Init();
 
     // 提示就绪
-    beep.period = 100;
+    /*beep.period = 100;
     beep.light_on_percent = 0.5f;
     beep.reset = 1;
-    beep.times = 1;
+    beep.times = 1;*/
 
     while (1) 
 		{
@@ -141,10 +150,10 @@ int main(void)
 						speed_integral[1] = 0;
 						speed_output[0] = 0;
 						speed_output[1] = 0;
-            speed_setup = 10.0f;
+            speed_setup = 20.0f;
             low_speed_timer=200;
 \
-            last_turn_finish_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
+            //last_turn_finish_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
 							
             break;
         }
@@ -158,23 +167,40 @@ int main(void)
 						speed_integral[1] = 0;
 						speed_output[0] = 0;
 						speed_output[1] = 0;
+            //speed_setup = 10.0f;
+            //low_speed_timer=200;
+					
+					  //last_turn_finish_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
+					
+            break;
+        }
+		    else if (_button.state[UP].press == LONG_PRESS) 
+				{
+            start_flag = 1;
+					  mission_mode = 3;
+						speed_integral[0] = 0;
+						speed_integral[1] = 0;
+						speed_output[0] = 0;
+						speed_output[1] = 0;
             speed_setup = 10.0f;
             low_speed_timer=200;
 					
-					  last_turn_finish_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
+					  //last_turn_finish_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
 					
             break;
         }
 				delay_ms(10);
     }
 		
-    beep.period = 200;
+    /*beep.period = 200;
     beep.light_on_percent = 0.5f;
     beep.reset = 1;
-    beep.times = 3;
-    //delay_ms(1000);
+    beep.times = 3;*/
+    
 
     while (1) {
         delay_ms(10);
+			    //char *msg = "5\r\n";
+    //UART_SendBytes(UART_2_INST, (uint8_t*)msg, strlen(msg));
     }
 }

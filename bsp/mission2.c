@@ -1,610 +1,290 @@
-/*======================== run_turn.c ========================*/
+/* ======================== mission2.c ========================
+ * 车载倒立摆-基础部分第二问 v2.0
+ * 状态机: IDLE → SWING_UP(正弦起摆+能量检测) → BALANCE(LQR全状态反馈+积分)
+ *
+ * 起摆: 正弦激励 @ 摆杆固有频率, 幅度线性爬升
+ *       能量检测: 当摆角连续进入平衡区后切换到LQR
+ * 平衡: LQR五状态反馈 [pos, vel, angle, angvel, ∫angle_err]
+ *       倒下 → 自动重新起摆
+ *       位置软限位防止跑出轨道
+ * ========================================================== */
+
 #include "mission2.h"
-/* 参数 */
-#define TARGET_DISTANCE_CM1  14.0f
-#define TARGET_DISTANCE_CM2  4.0f
+
 #define PULSE_PER_CM  (pulse_cnt_per_circle_default / (2.0f * 3.1415926f * tire_radius_cm_default))
-#define TARGET_PULSE1   ((int32_t)(TARGET_DISTANCE_CM1 * PULSE_PER_CM))
-#define TARGET_PULSE2   ((int32_t)(TARGET_DISTANCE_CM2 * PULSE_PER_CM))
-/* 外部变量 */
-extern float gray_status[2];
-extern _gray_state gray_state;
-extern float speed_setup;
-extern float turn_scale;
+
+/* ---- 外部变量 ---- */
 extern float speed_expect[2];
-extern float speed_integral[2];
 extern float speed_output[2];
-
-extern uint16_t low_speed_timer;
 extern encoder NEncoder;
-extern sensor smartcar_imu;
-extern _laser_light beep;
 
-/* 内部变量 */
-static float last_turn_output = 0;
-static uint16_t lost_timer = 0;
-
-static int32_t start_encoder_pulse = 0;
-static uint8_t encoder_recorded = 0;
-
-static float target_angle = 0;
-static uint32_t stop_start_time = 0;
- float current_delta_yaw2 ;  // 当前转过的角度（实时显示用）
-
-/* 急弯状态变量 */
-static SharpTurnState2 sharp_state = SHARP_DELAY2;
-static uint8_t white_state_count = 0;  // 转向完成次数计数
-static uint8_t run_turn_enabled2 = 1;     // 是否启用转向逻辑（停机标志）
-static uint16_t stabilize_timer = 0;     // 脱轨稳定缓冲计时（200Hz计数）
-int32_t last_turn_finish_pulse2 = 0; 
-uint8_t mission2_complete = 0;
-static float global_turn_dir2 = 0;
-/*======================== 获取状态接口 ========================*/
-SharpTurnState2 get_sharp_turn_state2(void)
-{
-    return sharp_state;
-}
-
-float get_target_angle2(void)
-{
-    return target_angle;
-}
-
-
-
-uint8_t get_white_state_count2(void)
-{
-    return white_state_count;
-}
-
-float get_current_delta_yaw2(void)
-{
-    return current_delta_yaw2;
-}
-
-void reset_white_state_count2(void)
-{
-    white_state_count = 0;
-}
-
-void set_run_turn_enabled2(uint8_t enabled)
-{
-    run_turn_enabled2 = enabled;
-}
-
-
-/*======================== 初始化 ========================*/
-void run_turn_init2(void)
-{
-    lost_timer = 0;
-    last_turn_output = 0;
-}
-
-
-/*======================== 直线 ========================*/
-void run_straight2(void)
-{
-    float turn_val;
-    gray_turn_control_200hz(&turn_val);
-
-    // 陀螺仪阻尼：用Z轴角速度抵抗偏航趋势
-    float gyro_z = smartcar_imu.gyro_dps.z;
-    float gyro_damping = -gyro_z * 0.25f;
-    gyro_damping = constrain_float(gyro_damping, -5.0f, 5.0f);
-
-    speed_expect[0] = speed_setup + turn_val * turn_scale ;
-    speed_expect[1] = speed_setup - turn_val * turn_scale ;
-
-    last_turn_output = turn_val;   // 保持转向方向记录，丢线时使用
-}
-
-
-/*======================== 普通弯道 ========================*/
-void run_curve2(void)
-{
-    float turn_val;
-    gray_turn_control_200hz(&turn_val);
-
-    // 丢线保持逻辑
-    if (gray_state.state == 0x0000)
-    {
-        if (lost_timer == 0)
-        {
-            last_turn_output = turn_val;
-            lost_timer = 40;
-        }
-        if (lost_timer > 0)
-        {
-            lost_timer--;
-            turn_val = last_turn_output;
-        }
-    }
-    else
-    {
-        lost_timer = 0;
-    }
-
-    float error_abs = ABS(gray_status[0]);
-
-    float current_speed;
-    float scale;
-
-    if (error_abs >= 6)
-    {
-        current_speed = 40.0f;
-        scale = 0.15f;
-    }
-    else
-    {
-        current_speed = 40.0f;
-        scale = 0.10f;
-    }
-
-    speed_expect[0] = current_speed + turn_val * scale;
-    speed_expect[1] = current_speed - turn_val * scale;
-
-    last_turn_output = turn_val;   // 更新方向记录
-}
-
-
-/*======================== 急弯/直角弯 ========================*/
-void run_sharp_turn2(void)
-{
-    switch (sharp_state)
-    {
-        /*---------- 延迟前进 ----------*/
-        case SHARP_DELAY2:
-        {
-            static float start_yaw_delay = 0;
-            static uint8_t yaw_recorded = 0;
-
-            if (!encoder_recorded)
-            {
-                start_encoder_pulse =
-                    (NEncoder.left_motor_total_cnt +
-                     NEncoder.right_motor_total_cnt) / 2;
-                encoder_recorded = 1;
-                yaw_recorded = 0;   // 重置航向记录
-            }
-
-            int32_t now_pulse =
-                (NEncoder.left_motor_total_cnt +
-                 NEncoder.right_motor_total_cnt) / 2;
-            int32_t traveled_pulse = now_pulse - start_encoder_pulse;
-						
-						
-						if (white_state_count == 0 )
-						{						
-						    if (traveled_pulse >= TARGET_PULSE1)
-								{
-                // 前进距离足够，停车并准备转向
-                speed_expect[0] = 0;
-                speed_expect[1] = 0;
-								speed_integral[0] = 0;
-							  speed_integral[1] = 0;
-								speed_output[0] = 0;
-                speed_output[1] = 0;							
-                stop_start_time = millis();
-								if (last_turn_output > 0) 
-								{
-										global_turn_dir2 = 1.0f;  // 全局锁定为右转
-										target_angle = -90.0f;
-								} 
-								else 
-								{
-										global_turn_dir2 = -1.0f; // 全局锁定为左转
-										target_angle = 90.0f;
-							  }
-                sharp_state = SHARP_WAIT2;
-                yaw_recorded = 0;   // 下一阶段不再需要
-								}
-								else
-								{
-                // 直线前进，带 IMU 航向保持
-                float straight_speed = 10.0f;
-
-                if (!yaw_recorded)
-                {
-                    start_yaw_delay = smartcar_imu.rpy_deg[_YAW];
-                    yaw_recorded = 1;
-                }
-
-                float yaw_err = smartcar_imu.rpy_deg[_YAW] - start_yaw_delay;
-                if (yaw_err > 180.0f) yaw_err -= 360.0f;
-                if (yaw_err < -180.0f) yaw_err += 360.0f;
-
-                float correction = yaw_err * 0.3f;
-                correction = constrain_float(correction, -3.0f, 3.0f);
-
-                speed_expect[0] = straight_speed - correction;
-                speed_expect[1] = straight_speed + correction;
-								}
-					  }
-						else if (white_state_count == 3)
-						{
-						    if (traveled_pulse >= TARGET_PULSE1)
-								{
-                // 前进距离足够，停车并准备转向
-                speed_expect[0] = 0;
-                speed_expect[1] = 0;
-								speed_integral[0] = 0;
-							  speed_integral[1] = 0;
-								speed_output[0] = 0;
-                speed_output[1] = 0;							
-                stop_start_time = millis();
-                if (global_turn_dir2 > 0) 
-                target_angle = 180.0f; // 或 180.0f，根据你陀螺仪的偏好
-                else 
-                target_angle = -180.0f;
-                sharp_state = SHARP_WAIT2;
-                yaw_recorded = 0;   // 下一阶段不再需要
-								}
-								else
-								{
-                // 直线前进，带 IMU 航向保持
-                float straight_speed = 10.0f;
-
-                if (!yaw_recorded)
-                {
-                    start_yaw_delay = smartcar_imu.rpy_deg[_YAW];
-                    yaw_recorded = 1;
-                }
-
-                float yaw_err = smartcar_imu.rpy_deg[_YAW] - start_yaw_delay;
-                if (yaw_err > 180.0f) yaw_err -= 360.0f;
-                if (yaw_err < -180.0f) yaw_err += 360.0f;
-
-                float correction = yaw_err * 0.3f;
-                correction = constrain_float(correction, -3.0f, 3.0f);
-
-                speed_expect[0] = straight_speed - correction;
-                speed_expect[1] = straight_speed + correction;
-								}						
-						}
-						else
-						{
-            if (traveled_pulse >= TARGET_PULSE2)
-            {
-                // 前进距离足够，停车并准备转向
-								speed_expect[0] = 0;
-								speed_expect[1] = 0;
-                // 如果是去程 (1, 2)，保持原方向
-								if (white_state_count < 3) 
-								{
-										target_angle = (global_turn_dir2 > 0) ? -90.0f : 90.0f;
-								} 
-               // 如果是回程 (掉头之后，即 4, 5, 6)，转弯方向相对于车头是反转的！
-								else 
-								{	
-										target_angle = (global_turn_dir2 > 0) ? 90.0f : -90.0f; 
-								}
-
-								sharp_state = SHARP_WAIT2;
-								yaw_recorded = 0;   // 下一阶段不再需要									
-            }
-            else
-            {
-                // 直线前进，带 IMU 航向保持
-                float straight_speed = 10.0f;
-
-                if (!yaw_recorded)
-                {
-                    start_yaw_delay = smartcar_imu.rpy_deg[_YAW];
-                    yaw_recorded = 1;
-                }
-
-                float yaw_err = smartcar_imu.rpy_deg[_YAW] - start_yaw_delay;
-                if (yaw_err > 180.0f) yaw_err -= 360.0f;
-                if (yaw_err < -180.0f) yaw_err += 360.0f;
-
-                float correction = yaw_err * 0.3f;
-                correction = constrain_float(correction, -3.0f, 3.0f);
-
-                speed_expect[0] = straight_speed - correction;
-                speed_expect[1] = straight_speed + correction;
-            }						
-						}
-            break;
-        }
-			
-
-        /*---------- 停车等待 ----------*/
-        case SHARP_WAIT2:
-        {
-            speed_expect[0] = 0;
-            speed_expect[1] = 0;
-
-            if (white_state_count == 0 || white_state_count == 3)
-						{							
-								if (millis() - stop_start_time >= 500)
-								{
-										sharp_state = SHARP_TURN2;
-									  white_state_count++;
-								}
-						}
-						else
-						{
-								if (millis() - stop_start_time >= 30)
-								{
-										sharp_state = SHARP_TURN2;
-									  white_state_count++;
-								}
-						}
-            break;
-        }
-
-        /*---------- 原地转向（PD闭环） ----------*/
-        case SHARP_TURN2:
-        {
-            static float start_yaw = 0;
-            static uint8_t started = 0;
-
-            if (!started)
-            {
-                start_yaw = smartcar_imu.rpy_deg[_YAW];
-                started = 1;
-            }
-
-            float delta_yaw =
-                smartcar_imu.rpy_deg[_YAW] - start_yaw;
-            if (delta_yaw > 180.0f) delta_yaw -= 360.0f;
-            if (delta_yaw < -180.0f) delta_yaw += 360.0f;
-                current_delta_yaw2 = delta_yaw;
-            float yaw_err = target_angle - delta_yaw;
-            if (yaw_err > 180.0f) yaw_err -= 360.0f;
-            if (yaw_err < -180.0f) yaw_err += 360.0f;
-
-            float remain = fabs(yaw_err);
-
-            if (remain <= 5.0f)
-            {
-                // 转向完成，进入脱轨前进阶段
-                speed_expect[0] = 0;
-                speed_expect[1] = 0;
-
-
-                started = 0;
-                encoder_recorded = 0;
-                          // 一次转向完成计数
-
-                // 重置各种状态
-                lost_timer = 0;
-                // last_turn_output 不重置，保持前一个有效值
-                speed_integral[0] = 0;
-                speed_integral[1] = 0;
-                speed_output[0] = 0;
-                speed_output[1] = 0;
-
-                // 蜂鸣器提示
-                beep.period = 100;
-                beep.light_on_percent = 0.5f;
-                beep.reset = 1;
-                beep.times = 1;
-
-                // 进入脱轨前进阶段
-                stop_start_time = millis();
-                sharp_state = SHARP_RELEASE2;
-            }
-            else
-            {
-                // PD闭环控制：P=角度误差，D=角速度阻尼
-                float p_out = yaw_err * 1.4f;
-                float d_out = -smartcar_imu.gyro_dps.z * 0.30f;
-                float turn_pwm = p_out + d_out;
-                turn_pwm = constrain_float(turn_pwm, -100.0f, 100.0f);
-
-                speed_expect[0] = -turn_pwm;
-                speed_expect[1] = turn_pwm;
-            }
-
-            break;
-        }
-
-        /*---------- 脱轨前进 ----------*/
-        case SHARP_RELEASE2:
-        {
-            // 短暂直线前进，帮助脱轨（300ms）
-            speed_expect[0] = 8.0f;
-            speed_expect[1] = 8.0f;
-
-            if (millis() - stop_start_time >= 30)
-            {
-                // 【新增】此时转弯彻底结束，记录此时的编码器平均值，作为下一段直道的起点
-                last_turn_finish_pulse2 = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2; 							
-                // 300ms后进入稳定缓冲期（防止巡线算法猛转）
-                sharp_state = SHARP_DELAY2;
-                stabilize_timer = 20;  // 缓冲200ms（20×10ms）
-                last_turn_output = 0;   // 重置转向记录，进入正常巡线
-                if (low_speed_timer == 0)
-                    speed_setup = 60.0f;
-                else
-                    speed_setup = 10.0f;
-
-                low_speed_timer = 60;    // 软启动计时
-            }
-
-            break;
-        }
-
-        default:
-            sharp_state = SHARP_DELAY2;
-            break;
-    }
-}
-
-
-/*======================== 总调度 ========================*/
+/* ---- 状态枚举 ---- */
+typedef enum {
+    PEND_IDLE = 0,
+    PEND_SWING_UP,
+    PEND_BALANCE,
+} PendState;
+
+/* ---- 内部状态 ---- */
+static PendState  g_state         = PEND_IDLE;
+static uint32_t   g_tick          = 0;
+static float      g_angle         = 0.0f;    /* 当前角度 (经过滤波)       */
+static float      g_angle_raw     = 0.0f;    /* 原始角度                  */
+static float      g_last_angle    = 0.0f;
+static float      g_angle_vel     = 0.0f;    /* 角速度 deg/s (LPF滤波)    */
+static float      g_angle_vel_raw = 0.0f;    /* 原始角速度估计            */
+static float      g_cart_pos      = 0.0f;    /* 小车位置 cm (相对起点)    */
+static float      g_cart_vel      = 0.0f;    /* 小车速度 cm/s             */
+static float      g_angle_int     = 0.0f;    /* 角度误差积分              */
+static int32_t    g_pos_ref       = 0;       /* 编码器参考零点            */
+static uint8_t    g_inited        = 0;
+static uint16_t   g_fall_count    = 0;       /* 倒下计数                  */
+static uint16_t   g_energy_hold   = 0;       /* 能量足够保持计数          */
+
+/* ==================== 内部函数声明 ==================== */
+static void pend_go_swing_up(void);
+static void pend_do_swing_up(void);
+static void pend_do_lqr_balance(void);
+static void pend_limit_cart_position(float *u);
+
+/* ==================== 200Hz 主控制循环 ==================== */
 void run_turn_logic2_200hz(void)
 {
-    /* 如果禁用转向逻辑，直接返回 */
-    if (!run_turn_enabled2)
-    {
-        return;
+    /* ---- 首次初始化 ---- */
+    if (!g_inited) {
+        WDD35D4_Init();
+        g_pos_ref = (NEncoder.left_motor_total_cnt +
+                     NEncoder.right_motor_total_cnt) / 2;
+        g_angle         = 0.0f;
+        g_angle_raw     = 0.0f;
+        g_last_angle    = 0.0f;
+        g_angle_vel     = 0.0f;
+        g_angle_vel_raw = 0.0f;
+        g_cart_pos      = 0.0f;
+        g_cart_vel      = 0.0f;
+        g_angle_int     = 0.0f;
+        g_tick          = 0;
+        g_fall_count    = 0;
+        g_energy_hold   = 0;
+        g_state         = PEND_SWING_UP;
+        g_inited        = 1;
     }
 
-    float error_abs = ABS(gray_status[0]);
+    /* ---- 读取传感器 ---- */
+    WDD35D4_StateMachine();
+    g_angle_raw  = WDD35D4_GetAngle();
 
-    /* 全白或正在转弯过程中：进入/继续急弯（禁用巡线） */
-    if (gray_state.state == 0x0000 || encoder_recorded)
+    /* 角度低通滤波 (减少ADC噪声) */
+    g_angle = g_angle * 0.85f + g_angle_raw * 0.15f;
+
+    /* 角速度: 差分 + 低通滤波 (用滤波后的角度做差分更平滑) */
+    g_angle_vel_raw = (g_angle - g_last_angle) * 200.0f;   /* 200Hz 差分 */
+    g_angle_vel = g_angle_vel * (1.0f - ANGVEL_LPF_ALPHA)
+                + g_angle_vel_raw * ANGVEL_LPF_ALPHA;
+    g_last_angle = g_angle;
+
+    /* 编码器里程: 位置 + 速度 */
     {
-        // 只在急弯刚开始时记录转向方向，避免在急弯过程中被覆盖
-        if (sharp_state == SHARP_DELAY2 && !encoder_recorded)
-        {
-            uint16_t pattern = last_valid_gray_state;
-    
-    // 计算左右两侧触发的探头数量 (简单的位计算)
-						uint8_t left_weight = 0;
-						uint8_t right_weight = 0;
-    
-						for(int i=7; i<=11; i++) if(pattern & (1<<i)) left_weight++;
-						for(int i=0; i<=4; i++)  if(pattern & (1<<i)) right_weight++;
-
-						if (left_weight > right_weight) 
-						{
-						last_turn_output = -1.0f;   // 左转
-						} 
-						else if (right_weight > left_weight) 
-						{
-						last_turn_output = 1.0f;    // 右转
-						} 
-    // 如果 left_weight == right_weight，保持 last_turn_output 上一次的值不变！
-    // 这样它就会沿用上一个弯道的方向，非常适合正方形赛道！
-        }
-
-        stabilize_timer = 0;  // 检测到全白，重置稳定缓冲
-        run_sharp_turn2();
-        return;
+        int32_t now = (NEncoder.left_motor_total_cnt +
+                       NEncoder.right_motor_total_cnt) / 2;
+        g_cart_pos = (float)(now - g_pos_ref) / PULSE_PER_CM;
+        g_cart_vel = (NEncoder.left_motor_speed_cmps +
+                      NEncoder.right_motor_speed_cmps) * 0.5f;
     }
+    g_tick++;
 
-    /* 脱轨稳定缓冲期内，保持直线前进，不执行巡线 */
-    if (stabilize_timer > 0)
-    {
-        stabilize_timer--;
-        speed_expect[0] = speed_setup;
-        speed_expect[1] = speed_setup;
-        return;
-    }
-
-    /* 小误差：直线 */
-    if (error_abs < 3)
-    {
-        run_straight2();
-    }
-    /* 中误差：普通弯 */
-    else
-    {
-        run_curve2();
+    /* ---- 状态机 ---- */
+    switch (g_state) {
+    case PEND_SWING_UP:
+        pend_do_swing_up();
+        break;
+    case PEND_BALANCE:
+        pend_do_lqr_balance();
+        break;
+    default:
+        break;
     }
 }
-void stop2 (void)
+
+/* ==================== 起摆 ==================== */
+static void pend_go_swing_up(void)
 {
-		uint8_t turn_count = get_white_state_count2();
+    g_tick        = 0;
+    g_energy_hold = 0;
+    g_fall_count  = 0;
+    g_angle_int   = 0.0f;
+    g_state       = PEND_SWING_UP;
 
-		if (turn_count >= 7 && mission2_complete == 0)
-		{
-				mission2_complete = 1;      // 进入第一阶段：主动刹车/倒车
-				set_run_turn_enabled2(0);   // 禁用巡线转向逻辑
-				stop_state_timer2 = 0;      // 清零计时器
+    /* 重新标定位置零点 */
+    g_pos_ref = (NEncoder.left_motor_total_cnt +
+                 NEncoder.right_motor_total_cnt) / 2;
+    g_cart_pos = 0.0f;
+}
 
-				// 【关键优化】瞬间清空之前的速度积分，防止PID的I项（积分）"顽固"地让车往前冲
-				speed_integral[0] = 0;
-				speed_integral[1] = 0;
-		}
+static void pend_do_swing_up(void)
+{
+    float error = g_angle - BALANCE_TARGET;
 
-// 倒车与停车状态机（不阻塞主循环）
-		if (mission2_complete == 1)
-		{
-				stop_state_timer2++;
-				// 200Hz下，1个周期5ms。设置 60个周期 = 300ms 的倒车时间（可根据实际测试稍微增减）
-				if (stop_state_timer2 <= 60) 
-				{
-						speed_expect[0] = -50.0f;  // 给一个较小的负向期望，让车轮反转制动
-						speed_expect[1] = -50.0f;
-				}
-				else
-				{
-						mission2_complete = 2; // 倒车结束，进入彻底停止阶段
-				}
-		}
-		else if (mission2_complete == 2)
-		{		
-				// 彻底停车锁死
-				speed_expect[0] = 0;
-				speed_expect[1] = 0;
-    
-				// 直接把输出抹零，切断动力
-				speed_output[0] = 0;
-				speed_output[1] = 0;
-				speed_setup = 0;
-		}
-    else if (mission2_complete == 0) 
-    {
-        // 1. 获取当前平均脉冲位置
-        int32_t current_avg_pulse = (NEncoder.left_motor_total_cnt + NEncoder.right_motor_total_cnt) / 2;
-        
-        // 2. 计算距离上一次转弯结束跑了多少脉冲
-        int32_t distance_pulse = current_avg_pulse - last_turn_finish_pulse2;
+    /* ---- 能量足够检测: 连续多个周期角度在平衡区内 ---- */
+    if (fabsf(error) <= BALANCE_ENTER_RANGE) {
+        g_energy_hold++;
+        if (g_energy_hold >= SWING_MIN_ENERGY_HOLD) {
+            /* 切换到平衡模式 */
+            g_state       = PEND_BALANCE;
+            g_angle_int   = 0.0f;
+            g_fall_count  = 0;
+            g_energy_hold = 0;
+            speed_expect[0] = 0.0f;
+            speed_expect[1] = 0.0f;
+            return;
+        }
+    } else {
+        /* 短暂进入后又出去, 重置计数 (带一点迟滞) */
+        if (g_energy_hold > 0 && fabsf(error) > BALANCE_RANGE) {
+            g_energy_hold = 0;
+        }
+    }
 
-        // 3. 距离判断：跑够65cm立刻降速备战直角弯
-				if (low_speed_timer == 0) 
-				{
-						if (distance_pulse >= DECEL_THRESHOLD_PULSE)
-								speed_setup = 40.0f;
-						else
-								speed_setup = 60.0f;
-				}
+    /* ---- 正弦起摆: 频率匹配摆杆固有频率, 幅度线性爬升 ---- */
+    uint32_t period_ticks = (uint32_t)(SWING_PERIOD_MS / 5.0f);   /* 5ms per tick @ 200Hz */
+    if (period_ticks < 10) period_ticks = 10;
+
+    uint32_t ramp_ticks = (uint32_t)(SWING_RAMP_TIME_S * 200.0f);
+
+    /* 相位: 用 sin 使速度从零开始渐变, 避免突变 */
+    float phase = (float)(g_tick % period_ticks) / (float)period_ticks
+                * 2.0f * 3.14159265f;
+
+    /* 幅度爬升: 线性从 START → MAX */
+    float ramp = (float)g_tick / (float)ramp_ticks;
+    if (ramp > 1.0f) ramp = 1.0f;
+
+    float amplitude = SWING_SPEED_START
+                    + (SWING_SPEED_MAX - SWING_SPEED_START) * ramp;
+    float speed = amplitude * sinf(phase);
+
+    speed_expect[0] = speed;
+    speed_expect[1] = speed;
+}
+
+/* ==================== 平衡: LQR 全状态反馈 + 积分 ==================== */
+static void pend_do_lqr_balance(void)
+{
+    float theta_err = g_angle - BALANCE_TARGET;
+
+    /* ---- 倒下检测 (带连续确认, 防止误触发) ---- */
+    if (fabsf(theta_err) > FALL_RECOVER_RANGE) {
+        g_fall_count++;
+        if (g_fall_count >= FALL_HOLD_COUNT) {
+            pend_go_swing_up();
+            return;
+        }
+    } else {
+        g_fall_count = 0;
+    }
+
+    /* ---- 角度积分 (抗饱和) ---- */
+    g_angle_int += theta_err * 0.005f;   /* dt = 1/200 = 0.005s */
+    if (g_angle_int >  LQR_INT_MAX) g_angle_int =  LQR_INT_MAX;
+    if (g_angle_int < -LQR_INT_MAX) g_angle_int = -LQR_INT_MAX;
+
+    /* 进入平衡区时清除积分, 防止起摆阶段的累积 */
+    if (fabsf(theta_err) > BALANCE_RANGE) {
+        g_angle_int *= 0.95f;   /* 缓慢泄漏 */
+    }
+
+    /* ---- LQR 全状态反馈 ---- */
+    /* u = -(K_pos * x + K_vel * v + K_angle * θ_err + K_angvel * ω)
+     *     + K_int * ∫θ_err
+     *
+     * 注意: 位置项用误差(当前位置-目标位置=0), 让小车回到原点附近
+     */
+    float u = -(LQR_K_POS       * g_cart_pos
+              + LQR_K_VEL       * g_cart_vel
+              + LQR_K_ANGLE     * theta_err
+              + LQR_K_ANGLE_VEL * g_angle_vel)
+              + LQR_K_INT_ANGLE * g_angle_int;
+
+    /* ---- 限幅 ---- */
+    if (u >  BALANCE_SPEED_LIMIT) u =  BALANCE_SPEED_LIMIT;
+    if (u < -BALANCE_SPEED_LIMIT) u = -BALANCE_SPEED_LIMIT;
+
+    /* ---- 位置软限位: 防止小车跑出轨道 ---- */
+    pend_limit_cart_position(&u);
+
+    speed_expect[0] = u;
+    speed_expect[1] = u;
+}
+
+/* ---- 位置软限位 ---- */
+static void pend_limit_cart_position(float *u)
+{
+    float margin = 10.0f;   /* 限位缓冲区 cm */
+
+    if (g_cart_pos > CART_POS_LIMIT_CM - margin) {
+        /* 太靠右 → 强制向左 */
+        float brake = -15.0f - (g_cart_pos - (CART_POS_LIMIT_CM - margin)) * 2.0f;
+        if (brake < *u) *u = brake;   /* 取更负的值 (更强制左转) */
+    } else if (g_cart_pos > CART_POS_LIMIT_CM) {
+        /* 超出硬限位 → 强力回拉 */
+        *u = -30.0f;
+    }
+
+    if (g_cart_pos < -(CART_POS_LIMIT_CM - margin)) {
+        /* 太靠左 → 强制向右 */
+        float brake = 15.0f + ((-(CART_POS_LIMIT_CM - margin)) - g_cart_pos) * 2.0f;
+        if (brake > *u) *u = brake;
+    } else if (g_cart_pos < -CART_POS_LIMIT_CM) {
+        /* 超出硬限位 → 强力回拉 */
+        *u = 30.0f;
     }
 }
+
+/* ==================== LCD 显示 (200ms 刷新) ==================== */
 void mission2_show(void)
 {
-	  laser_light_work(&beep);
-    static uint16_t disp_cnt = 0;
-    if (++disp_cnt >= 20) 
-    {
-        disp_cnt = 0;
-        float avg_speed = (NEncoder.left_motor_speed_cmps + NEncoder.right_motor_speed_cmps) * 0.5f;
-        write_6_8_number(0, 0, avg_speed);
-        write_6_8_number(70, 0, speed_setup);
-    }
-    // OLED 显示（200ms 一次）
     static uint32_t last_show = 0;
-    if (millis() - last_show > 200)
-    {
-        last_show = millis();
-        char buf[17];
-        float avg_spd = (NEncoder.left_motor_speed_cmps + NEncoder.right_motor_speed_cmps) * 0.5f;
-        sprintf(buf, "Spd:%4.1f/%4.1f", avg_spd, speed_setup);
-        LCD_P6x8Str(0, 0, (unsigned char*)buf);
-        sprintf(buf, "Err:%5.1f", gray_status[0]);
-        LCD_P6x8Str(0, 1, (unsigned char*)buf);
+    if (millis() - last_show < 200) return;
+    last_show = millis();
 
-        // 使用 run_turn 接口获取状态
-        const char* state_str;
-        SharpTurnState2 turn_state = get_sharp_turn_state2();
-        switch (turn_state)
-        {
-            case SHARP_DELAY2:  state_str = "DELAY    "; break;
-            case SHARP_WAIT2:   state_str = "WAIT     "; break;
-            case SHARP_TURN2:   state_str = "TURN     "; break;
-            default:           state_str = "NORMAL   "; break;
-        }
-        sprintf(buf, "State:%s", state_str);
-        LCD_P6x8Str(0, 2, (unsigned char*)buf);
+    char buf[17];
 
-        float relative = get_current_delta_yaw2();  // 显示当前转过的角度
-        float target = get_target_angle2();
-        sprintf(buf, "Ang:%5.1f/%4.1f", relative, target);
-        LCD_P6x8Str(0, 3, (unsigned char*)buf);
+    LCD_P6x8Str(0, 0, (unsigned char*)"M2 LQR Balance v2");
 
-        sprintf(buf, "GyroZ:%+5.1f", smartcar_imu.gyro_dps.z);
-        LCD_P6x8Str(0, 4, (unsigned char*)buf);
-        
-        // 可选：显示转向计数
-        sprintf(buf, "Turn:%d", get_white_state_count2());
-        LCD_P6x8Str(0, 5, (unsigned char*)buf);
-    }	
+    const char *st;
+    switch (g_state) {
+    case PEND_SWING_UP: st = "SWING UP"; break;
+    case PEND_BALANCE:  st = "BALANCE "; break;
+    default:            st = "IDLE    "; break;
+    }
+    sprintf(buf, "St:%s E:%u", st, g_energy_hold);
+    LCD_P6x8Str(0, 1, (unsigned char*)buf);
 
+    sprintf(buf, "Ang:%5.1f /%.0f", g_angle, BALANCE_TARGET);
+    LCD_P6x8Str(0, 2, (unsigned char*)buf);
 
+    sprintf(buf, "dA:%+5.0f E:%+4.1f", g_angle_vel,
+            g_angle - BALANCE_TARGET);
+    LCD_P6x8Str(0, 3, (unsigned char*)buf);
 
+    float out = (speed_expect[0] + speed_expect[1]) * 0.5f;
+    sprintf(buf, "U:%+4.0f X:%+4.0f", out, g_cart_pos);
+    LCD_P6x8Str(0, 4, (unsigned char*)buf);
 
+    sprintf(buf, "V:%+4.0f I:%+4.1f", g_cart_vel, g_angle_int);
+    LCD_P6x8Str(0, 5, (unsigned char*)buf);
+
+    sprintf(buf, "KA:%.2f KV:%.3f", LQR_K_ANGLE, LQR_K_ANGLE_VEL);
+    LCD_P6x8Str(0, 6, (unsigned char*)buf);
+
+    uint16_t raw = WDD35D4_ReadRaw();
+    sprintf(buf, "ADC:%5u FC:%u", raw, g_fall_count);
+    LCD_P6x8Str(0, 7, (unsigned char*)buf);
+}
+
+/* ==================== 停止逻辑 ==================== */
+void stop2(void)
+{
+    /* 预留: 任务完成后的停止处理 */
+    /* 当前由主循环的 start_flag 控制启停 */
 }
